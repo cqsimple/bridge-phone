@@ -1,0 +1,7 @@
+[
+  {
+    "name": "rpi-site-1",
+    "label": "Site Name Here",
+    "vpn_ip": "10.8.0.10"
+  }
+]

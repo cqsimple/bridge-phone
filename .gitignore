@@ -1,0 +1,18 @@
+# Sensitive files - never commit these
+*.ovpn
+*.key
+*.crt
+*.pem
+dashboard.db
+sites.json
+/etc/wireguard/
+users.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Logs
+*.log
