@@ -13,3 +13,6 @@ See the user guide in docs/ for full setup instructions.
 
 ## Security
 Never commit certificates, keys, .ovpn files or the dashboard database.
+
+Orange Pi ssh login root / pony.door.stool
+Raspberry PI ssh login cqsimple / pony.door.stool
