@@ -81,8 +81,8 @@ info "Setting up Device Browser..."
 mkdir -p /opt/device-browser
 python3 -m venv /opt/device-browser/venv
 apt-get install -y python3-dev build-essential --quiet
+apt-get install -y python3-dev build-essential -qq
 /opt/device-browser/venv/bin/pip install flask requests netifaces --quiet
-/opt/device-browser/venv/bin/pip install netifaces --quiet 2>/dev/null || apt-get install -y python3-dev && /opt/device-browser/venv/bin/pip install netifaces --quiet
 
 # Download app.py from GitHub
 curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/app.py \
