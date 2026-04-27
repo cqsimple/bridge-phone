@@ -1237,8 +1237,13 @@ def admin_new_site():
             <a href='/admin/new-site/{s["name"]}/download-ovpn'
                style='background:rgba(88,166,255,.12);color:#58a6ff;
                border:1px solid rgba(88,166,255,.28);border-radius:6px;
-               padding:4px 10px;font-size:.72rem;text-decoration:none'>
+               padding:4px 10px;font-size:.72rem;text-decoration:none;margin-right:6px'>
                Download .ovpn</a>
+            <a href='/admin/new-site/{s["name"]}/download-package'
+               style='background:rgba(63,185,80,.12);color:#3fb950;
+               border:1px solid rgba(63,185,80,.28);border-radius:6px;
+               padding:4px 10px;font-size:.72rem;text-decoration:none'>
+               &#8659; Download Setup Package</a>
         </td>
     </tr>""" for s in sites)
 
@@ -1525,6 +1530,68 @@ def device_catchall(subpath="", pbx_ip=None):
                 code=307)
 
     return "Unhandled path", 400
+
+
+@app.route("/admin/new-site/<site_name>/download-package")
+@admin_required
+def admin_download_package(site_name):
+    import zipfile as _zf
+    import io as _io
+    import os as _os
+
+    ovpn_path = f"/etc/openvpn/clients/{site_name}/{site_name}.ovpn"
+    setup_path = "/root/rpi_setup.sh"
+
+    if not _os.path.exists(ovpn_path):
+        return f"No .ovpn file found for {site_name}. Generate the certificate first.", 404
+
+    # Create zip in memory
+    buf = _io.BytesIO()
+    with _zf.ZipFile(buf, "w", _zf.ZIP_DEFLATED) as zf:
+        zf.write(ovpn_path, f"{site_name}.ovpn")
+        if _os.path.exists(setup_path):
+            zf.write(setup_path, "rpi_setup.sh")
+        else:
+            # Fallback - download from GitHub
+            try:
+                import urllib.request as _ur
+                url = "https://raw.githubusercontent.com/cqsimple/bridge-phone/main/scripts/rpi_setup.sh"
+                with _ur.urlopen(url, timeout=10) as r:
+                    zf.writestr("rpi_setup.sh", r.read())
+            except:
+                zf.writestr("rpi_setup.sh", "# Setup script not found - download from GitHub\n")
+
+        # Add a README
+        readme = f"""Bridge Phone - Site Setup Package
+==================================
+Site: {site_name}
+
+Files included:
+  {site_name}.ovpn  - VPN configuration file
+  rpi_setup.sh      - Setup script
+
+Setup Instructions:
+1. Copy both files to your Raspberry Pi or Orange Pi Zero 3
+2. SSH into the device
+3. Run: sudo bash rpi_setup.sh {site_name}.ovpn
+4. Wait 5-10 minutes for setup to complete
+5. The device will connect to the VPN automatically
+6. Assign the site to users in Admin > Site Assignments
+
+Requirements:
+- Raspberry Pi 3B/3B+ OR Orange Pi Zero 3
+- Raspberry Pi OS Lite 64-bit OR Armbian Ubuntu
+- SSH enabled, ethernet connected
+"""
+        zf.writestr("README.txt", readme)
+
+    buf.seek(0)
+    from flask import Response
+    return Response(
+        buf.getvalue(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={site_name}-setup.zip"}
+    )
 
 if __name__=="__main__":
     init_db()
