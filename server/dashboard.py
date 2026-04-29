@@ -1223,7 +1223,8 @@ def admin_new_site():
 
     # Calculate what the next VPN IP will be
     existing_ccd = len([s for s in sites])
-    next_ip = f"10.8.0.{(existing_ccd + 1) * 10}"
+    site_num = existing_ccd + 1
+    next_ip = f"10.8.{site_num // 254}.{(site_num % 254) + 1}"
     next_name = f"rpi-site-{existing_ccd + 1}"
 
     site_rows = "".join(f"""<tr>
@@ -1242,8 +1243,15 @@ def admin_new_site():
             <a href='/admin/new-site/{s["name"]}/download-package'
                style='background:rgba(63,185,80,.12);color:#3fb950;
                border:1px solid rgba(63,185,80,.28);border-radius:6px;
-               padding:4px 10px;font-size:.72rem;text-decoration:none'>
+               padding:4px 10px;font-size:.72rem;text-decoration:none;margin-right:6px'>
                &#8659; Download Setup Package</a>
+            <form method='POST' action='/admin/new-site/{s["name"]}/delete'
+               onsubmit="return confirm('Delete this site? This will revoke the VPN certificate and cannot be undone.')"
+               style='display:inline'>
+               <button style='background:rgba(248,81,73,.12);color:#f85149;
+               border:1px solid rgba(248,81,73,.28);border-radius:6px;
+               padding:4px 10px;font-size:.72rem;cursor:pointer'>Delete</button>
+            </form>
         </td>
     </tr>""" for s in sites)
 
@@ -1592,6 +1600,67 @@ Requirements:
         mimetype="application/zip",
         headers={"Content-Disposition": f"attachment; filename={site_name}-setup.zip"}
     )
+
+
+@app.route("/admin/new-site/<site_name>/delete", methods=["POST"])
+@admin_required
+def admin_delete_site(site_name):
+    import subprocess as _sp
+    import shutil as _sh
+
+    errors = []
+
+    # 1. Remove from sites.json
+    try:
+        sites = load_sites()
+        sites = [s for s in sites if s["name"] != site_name]
+        with open(SITES_FILE, "w") as f:
+            import json as _j
+            _j.dump(sites, f, indent=2)
+    except Exception as e:
+        errors.append(f"sites.json: {e}")
+
+    # 2. Revoke certificate
+    try:
+        _sp.run(
+            ["bash", "-c", f"cd /etc/openvpn/easy-rsa && ./easyrsa --batch revoke {site_name} && ./easyrsa gen-crl"],
+            capture_output=True
+        )
+    except Exception as e:
+        errors.append(f"cert revoke: {e}")
+
+    # 3. Remove CCD entry
+    try:
+        ccd = f"/etc/openvpn/ccd/{site_name}"
+        if os.path.exists(ccd):
+            os.remove(ccd)
+    except Exception as e:
+        errors.append(f"ccd: {e}")
+
+    # 4. Remove client config files
+    try:
+        client_dir = f"/etc/openvpn/clients/{site_name}"
+        if os.path.exists(client_dir):
+            _sh.rmtree(client_dir)
+    except Exception as e:
+        errors.append(f"client dir: {e}")
+
+    # 5. Disconnect VPN if connected
+    try:
+        disconnect_client(site_name)
+    except Exception as e:
+        errors.append(f"disconnect: {e}")
+
+    # 6. Remove from cache
+    with _lock:
+        _cache.pop(site_name, None)
+
+    if errors:
+        session["flash"] = [(f"Site deleted with warnings: {', '.join(errors)}", "ok2")]
+    else:
+        session["flash"] = [(f"Site '{site_name}' deleted successfully.", "ok2")]
+
+    return redirect("/admin/new-site")
 
 if __name__=="__main__":
     init_db()
