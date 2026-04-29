@@ -822,20 +822,16 @@ def proxy_site(site_name, subpath=""):
             body = body.replace(b'action: "/cgi-bin/', b'action: "' + dev_base + b'/cgi-bin/')
             body = body.replace(b'url("/', dev_base + b'/')
             body = body.replace(b'background:url(/', b'background:url(' + dev_base + b'/')
-            body = body.replace(b'window.location.href ="/', dev_base + b'/')
-            body = body.replace(b"window.location.href ='/", dev_base + b'/')
-            body = body.replace(b'window.location.href ="/', dev_base + b'/')
-            body = body.replace(b"window.location.href ='/", dev_base + b'/')
-            body = body.replace(b'window.location="/', b'window.location.href="' + dev_base + b'/')
-            body = body.replace(b'window.location ="\/', b'window.location.href="' + dev_base + b'/')
-            body = body.replace(b'window.location ="/', b'window.location.href="/' + dev_base[1:] + b'/')
-            body = body.replace(b'window.location ="/', b'window.location ="' + dev_base + b'/')
-            body = body.replace(b"window.location ='/", b"window.location ='" + dev_base + b"/")
-            body = body.replace(b'window.location="/', b'window.location="' + dev_base + b'/')
-            body = body.replace(b"window.location='/", b"window.location='" + dev_base + b"/")
-            # Rewrite Ajax/XHR absolute paths in JS
-            import re as _re2
-            body = _re2.sub(
+            # Rewrite window.location /device/ absolute paths
+            body = body.replace(b'window.location ="/device/', b'window.location ="' + b"/site/" + site_name.encode() + b'/device/')
+            body = body.replace(b"window.location ='/device/", b"window.location ='" + b"/site/" + site_name.encode() + b"/device/")
+            body = body.replace(b'window.location="/device/', b'window.location="' + b"/site/" + site_name.encode() + b'/device/')
+            body = body.replace(b"window.location='/device/", b"window.location='" + b"/site/" + site_name.encode() + b"/device/")
+            body = body.replace(b'window.location.href ="/device/', b'window.location.href ="' + b"/site/" + site_name.encode() + b'/device/')
+            body = body.replace(b"window.location.href ='/device/", b"window.location.href ='" + b"/site/" + site_name.encode() + b"/device/")
+            body = body.replace(b'window.location.href="/device/', b'window.location.href="' + b"/site/" + site_name.encode() + b'/device/')
+            body = body.replace(b"window.location.href='/device/", b"window.location.href='" + b"/site/" + site_name.encode() + b"/device/")
+            body = _re.sub(
                 rb'(get_E|post_E|send)\s*\(["\'](/servlet)',
                 lambda m: m.group(1) + b'("' + dev_base + m.group(2),
                 body
