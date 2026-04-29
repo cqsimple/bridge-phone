@@ -1206,7 +1206,7 @@ def admin_wg_users_download(username):
 def admin_wg_users_delete(username):
     try:
         result = _sp.check_output(
-            ["bash", "/root/wireguard/03_remove_wg_user.sh", username],
+            ["bash", "/root/Wireguard_setup/03_remove_wg_user.sh", username],
             stderr=_sp.STDOUT
         ).decode()
         session["flash"] = [(f"User '{username}' removed.", "ok2")]
