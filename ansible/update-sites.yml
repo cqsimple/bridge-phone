@@ -1,0 +1,35 @@
+---
+- name: Update Bridge Phone Device Browser on all sites
+  hosts: bridge_phone_sites
+  become: yes
+
+  tasks:
+    - name: Download latest app.py from GitHub
+      shell: |
+        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/app.py              -o /opt/device-browser/app.py
+      args:
+        executable: /bin/bash
+
+    - name: Download latest nginx config from GitHub
+      shell: |
+        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/nginx-device-browser.conf              -o /etc/nginx/sites-available/device-browser
+      args:
+        executable: /bin/bash
+
+    - name: Restart device browser
+      systemd:
+        name: device-browser
+        state: restarted
+
+    - name: Reload nginx
+      systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Check device browser status
+      shell: systemctl is-active device-browser
+      register: service_status
+
+    - name: Report status
+      debug:
+        msg: "{{ inventory_hostname }} - device-browser is {{ service_status.stdout }}"
