@@ -60,6 +60,25 @@ def cu():
     return{"id":session.get("user_id"),"username":session.get("username"),
            "is_admin":session.get("is_admin",False)}
 
+
+def update_ansible_inventory():
+    """Keep ansible inventory in sync with sites.json"""
+    import os as _os
+    inventory_path = "/opt/bridge-phone/ansible/inventory.ini"
+    if not _os.path.exists(_os.path.dirname(inventory_path)):
+        return
+    sites = load_sites()
+    lines = ["[bridge_phone_sites]\n"]
+    for s in sites:
+        name = s["name"]
+        ip   = s["vpn_ip"]
+        lines.append(f"{name} ansible_host={ip} ansible_user=root\n")
+    lines.append("\n[bridge_phone_sites:vars]\n")
+    lines.append("ansible_ssh_private_key_file=/root/.ssh/id_rsa\n")
+    lines.append("ansible_ssh_common_args='-o StrictHostKeyChecking=no'\n")
+    with open(inventory_path, "w") as f:
+        f.writelines(lines)
+
 def load_sites():
     try:
         with open(SITES_FILE) as f:return json.load(f)
@@ -1315,6 +1334,18 @@ def admin_new_site():
     <main>
       {"".join(f'<div class="flash {c}">{m}</div>' for m,c in msgs)}
 
+      <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+        <button onclick="updateAllSites()" id="update-btn"
+            style="background:rgba(63,185,80,.12);color:#3fb950;
+            border:1px solid rgba(63,185,80,.28);border-radius:6px;
+            padding:8px 16px;font-size:.8rem;cursor:pointer;font-family:inherit">
+            &#8635; Update All Sites
+        </button>
+      </div>
+      <div id="update-status" style="display:none;margin-bottom:16px;
+          padding:10px 14px;border-radius:6px;font-size:.8rem;
+          background:rgba(63,185,80,.09);border:1px solid rgba(63,185,80,.28);color:#3fb950">
+      </div>
       <div class="card">
         <div class="ch"><strong>Create New RPi Site</strong></div>
         <div class="cb">
@@ -1657,6 +1688,29 @@ def admin_delete_site(site_name):
         session["flash"] = [(f"Site '{site_name}' deleted successfully.", "ok2")]
 
     return redirect("/admin/new-site")
+
+
+@app.route("/api/update-sites", methods=["POST"])
+@admin_required
+def api_update_sites():
+    import subprocess as _sp
+    import threading as _t
+    def run_update():
+        try:
+            result = _sp.run(
+                ["ansible-playbook",
+                 "-i", "/opt/bridge-phone/ansible/inventory.ini",
+                 "/opt/bridge-phone/ansible/update-sites.yml"],
+                capture_output=True, text=True, timeout=300
+            )
+            print(f"[ansible] returncode={result.returncode}", flush=True)
+            print(f"[ansible] stdout={result.stdout[-500:]}", flush=True)
+            if result.stderr:
+                print(f"[ansible] stderr={result.stderr[-200:]}", flush=True)
+        except Exception as e:
+            print(f"[ansible] error={e}", flush=True)
+    _t.Thread(target=run_update, daemon=True).start()
+    return jsonify({"status": "started", "message": "Update started on all sites"})
 
 if __name__=="__main__":
     init_db()
