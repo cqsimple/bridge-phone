@@ -46,6 +46,49 @@ pip3 install requests --break-system-packages 2>/dev/null || \
     pip3 install requests 2>/dev/null || true
 ok "Packages installed"
 
+# ── Ethernet compatibility fixes ─────────────────────────────────────────────
+info "Applying ethernet compatibility fixes for managed switches..."
+
+# Detect config.txt location (RPi vs Armbian)
+if [ -f /boot/firmware/config.txt ]; then
+    CONFIG=/boot/firmware/config.txt
+elif [ -f /boot/config.txt ]; then
+    CONFIG=/boot/config.txt
+else
+    CONFIG=""
+fi
+
+if [ -n "$CONFIG" ]; then
+    grep -q "dtparam=eth_max_speed=100" $CONFIG || echo "dtparam=eth_max_speed=100" >> $CONFIG
+    grep -q "dtparam=eee=off" $CONFIG || echo "dtparam=eee=off" >> $CONFIG
+    ok "Boot config ethernet fixes applied ($CONFIG)"
+fi
+
+# Disable IPv6
+if ! grep -q "disable_ipv6" /etc/sysctl.conf; then
+    echo "net.ipv6.conf.all.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.default.disable_ipv6 = 1" >> /etc/sysctl.conf
+    echo "net.ipv6.conf.lo.disable_ipv6 = 1" >> /etc/sysctl.conf
+    sysctl -p > /dev/null 2>&1
+    ok "IPv6 disabled"
+fi
+
+# Force 100Mbps full duplex at runtime and on every boot
+apt-get install -y -qq ethtool 2>/dev/null || true
+if command -v ethtool &>/dev/null; then
+    ethtool -s $NET_IFACE speed 100 duplex full autoneg off 2>/dev/null || true
+    if [ -f /etc/rc.local ]; then
+        grep -q "ethtool.*speed 100" /etc/rc.local ||             sed -i "s|exit 0|ethtool -s $NET_IFACE speed 100 duplex full autoneg off 2>/dev/null || true\nexit 0|" /etc/rc.local
+    else
+        printf "#!/bin/bash
+ethtool -s $NET_IFACE speed 100 duplex full autoneg off 2>/dev/null || true
+exit 0
+" > /etc/rc.local
+        chmod +x /etc/rc.local
+    fi
+    ok "Ethernet forced to 100Mbps full duplex"
+fi
+
 # ── OpenVPN setup ─────────────────────────────────────────────────────────────
 info "Setting up OpenVPN..."
 mkdir -p /etc/openvpn/hooks
