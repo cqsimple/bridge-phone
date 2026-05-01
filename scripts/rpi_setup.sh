@@ -241,6 +241,86 @@ ok "SSH keys ready"
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
+# ── Read-only filesystem ─────────────────────────────────────────────────────
+info "Configuring read-only filesystem to protect SD card..."
+
+# Install overlayroot (available on Ubuntu/Armbian)
+apt-get install -y -qq overlayroot 2>/dev/null || true
+
+if dpkg -l overlayroot 2>/dev/null | grep -q "^ii"; then
+    # Configure overlayroot
+    cat > /etc/overlayroot.conf << 'ORCONF'
+overlayroot="tmpfs:swap=0,recurse=0"
+overlayroot_cfgdisk="disabled"
+ORCONF
+    ok "overlayroot configured - SD card protected after next reboot"
+else
+    # Fallback - use log2ram to at least protect from log writes
+    info "overlayroot not available - installing log2ram as fallback..."
+    apt-get install -y -qq rsync 2>/dev/null || true
+    # Create log2ram service
+    cat > /etc/systemd/system/log2ram.service << 'L2REOF'
+[Unit]
+Description=Log2Ram - Logs in RAM
+After=local-fs.target
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/log2ram start
+ExecStop=/usr/local/bin/log2ram stop
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+L2REOF
+
+    cat > /usr/local/bin/log2ram << 'L2RBIN'
+#!/bin/bash
+LOG_DIR=/var/log
+RAM_DIR=/run/log2ram
+SIZE=40M
+
+case "$1" in
+  start)
+    mkdir -p $RAM_DIR
+    mount -t tmpfs -o size=$SIZE tmpfs $RAM_DIR
+    rsync -a --delete $LOG_DIR/ $RAM_DIR/
+    mount --bind $RAM_DIR $LOG_DIR
+    ;;
+  stop)
+    rsync -a --delete $LOG_DIR/ $(findmnt -n -o SOURCE $LOG_DIR | head -1)/ 2>/dev/null || true
+    umount $LOG_DIR 2>/dev/null || true
+    umount $RAM_DIR 2>/dev/null || true
+    ;;
+esac
+L2RBIN
+    chmod +x /usr/local/bin/log2ram
+    systemctl enable log2ram
+    ok "log2ram configured - logs will be stored in RAM"
+fi
+
+# Move /tmp to tmpfs
+if ! grep -q "tmpfs /tmp" /etc/fstab; then
+    echo "tmpfs /tmp tmpfs defaults,noatime,nosuid,size=64m 0 0" >> /etc/fstab
+    ok "/tmp moved to RAM"
+fi
+
+# Reduce SD card writes - tune journald
+mkdir -p /etc/systemd/journald.conf.d/
+cat > /etc/systemd/journald.conf.d/no-persist.conf << 'JCONF'
+[Journal]
+Storage=volatile
+RuntimeMaxUse=20M
+JCONF
+ok "System logs set to volatile (RAM only)"
+
+# Disable swap to protect SD card
+systemctl disable dphys-swapfile 2>/dev/null || true
+swapoff -a 2>/dev/null || true
+sed -i '/ swap / s/^/#/' /etc/fstab 2>/dev/null || true
+ok "Swap disabled"
+
 echo -e "${BOLD}${CYAN}════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD} Setup Complete!${NC}"
 echo -e "  Site name:  $SITE_NAME"
