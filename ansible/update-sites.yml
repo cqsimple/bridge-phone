@@ -2,17 +2,32 @@
 - name: Update Bridge Phone Device Browser on all sites
   hosts: bridge_phone_sites
   become: yes
-
   tasks:
     - name: Download latest app.py from GitHub
       shell: |
-        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/app.py              -o /opt/device-browser/app.py
+        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/app.py \
+             -o /opt/device-browser/app.py
+      args:
+        executable: /bin/bash
+
+    - name: Download latest profiles.json from GitHub
+      shell: |
+        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/profiles.json \
+             -o /opt/device-browser/profiles.json
       args:
         executable: /bin/bash
 
     - name: Download latest nginx config from GitHub
       shell: |
-        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/nginx-device-browser.conf              -o /etc/nginx/sites-available/device-browser
+        curl -s https://raw.githubusercontent.com/cqsimple/bridge-phone/main/rpi/nginx-device-browser.conf \
+             -o /var/device-browser.conf
+      args:
+        executable: /bin/bash
+
+    - name: Ensure nginx symlinks point to /var/device-browser.conf
+      shell: |
+        ln -sf /var/device-browser.conf /etc/nginx/sites-available/device-browser
+        ln -sf /var/device-browser.conf /etc/nginx/sites-enabled/device-browser
       args:
         executable: /bin/bash
 
