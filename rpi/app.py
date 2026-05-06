@@ -477,7 +477,7 @@ function openNimbus(ip, vtype){
   }
 }
 poll();setInterval(poll,10000);
-
+</script>
 <div id="lm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;align-items:center;justify-content:center">
   <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:28px 32px;width:340px;box-shadow:0 16px 48px rgba(0,0,0,.6)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
