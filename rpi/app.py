@@ -538,7 +538,8 @@ function doLogin(){
   fetch(_b+"device-login/"+_lmip+"/"+_lmport,{method:"POST",body:fd})
     .then(function(r){
       closeLM();
-      window.open(_lmredir,"_blank");
+      var _b2=window.location.href; if(!_b2.endsWith("/")) _b2+="/";
+      window.open(_b2+_lmredir,"_blank");
     })
     .catch(function(ex){
       err.textContent="Error: "+ex; err.style.display="block";
