@@ -41,7 +41,7 @@ _lock = threading.Lock()
 
 # ── Vendor profiles ──────────────────────────────────────────
 import json as _json
-_PROFILES_PATH = os.path.join(os.path.dirname(__file__), "profiles.json")
+_PROFILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles.json")
 
 def load_profiles():
     try:
@@ -455,9 +455,9 @@ function render(sc=false){
           const labels={"freepbx":"Open Nimbus","yealink":"Open Yealink","grandstream":"Open Grandstream","fanvil":"Open ClearlyIP","atcom":"Open Atcom"};
           const colors={"freepbx":"rgba(63,185,80,.09);border-color:rgba(63,185,80,.3);color:#3fb950","yealink":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","grandstream":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","fanvil":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","atcom":"rgba(210,153,34,.09);border-color:rgba(210,153,34,.3);color:#d29922"};
           if(!vt||!labels[vt]) return "";
-          const openBtn=`<a class="el" href="javascript:void(0)" onclick="openNimbus('${d.ip}','${vt}')" style="background:${colors[vt]};margin-top:4px"><span>&#x260E;</span><span class="et">${labels[vt]}</span><span class="ea">&#x2197;</span></a>`;
-          const loginBtn=`<a class="el" href="javascript:void(0)" onclick="openLoginModal('${d.ip}',${d.port||80},'${vt}','${d.mac||''}\`)" style="background:rgba(255,165,0,.09);border-color:rgba(255,165,0,.3);color:#d4a017;margin-top:4px"><span>&#x1F511;</span><span class="et">Login</span><span class="ea">&#x2197;</span></a>`;
-          return openBtn+loginBtn;
+          const ob=`<a class="el" href="javascript:void(0)" onclick="openNimbus('${d.ip}','${vt}')" style="background:${colors[vt]};margin-top:4px"><span>&#x260E;</span><span class="et">${labels[vt]}</span><span class="ea">&#x2197;</span></a>`;
+          const lb=`<a class="el" href="javascript:void(0)" onclick="showLogin('${d.ip}',${d.port||80},'${vt}')" style="background:rgba(255,165,0,.09);border-color:rgba(255,165,0,.3);color:#d4a017;margin-top:4px"><span>&#x1F511;</span><span class="et">Login</span><span class="ea">&#x2197;</span></a>`;
+          return ob+lb;
         })()}
         </div>
       </div>
@@ -478,150 +478,75 @@ function openNimbus(ip, vtype){
 }
 poll();setInterval(poll,10000);
 
-<!-- ── Login Modal ───────────────────────────────────────── -->
-<div id="login-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;align-items:center;justify-content:center">
+<div id="lm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;align-items:center;justify-content:center">
   <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:28px 32px;width:340px;box-shadow:0 16px 48px rgba(0,0,0,.6)">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
-      <div>
-        <div id="lm-title" style="font-size:15px;font-weight:700;color:#e6edf3"></div>
-        <div id="lm-sub" style="font-size:12px;color:#8b949e;margin-top:3px"></div>
-      </div>
-      <span onclick="closeLoginModal()" style="cursor:pointer;color:#8b949e;font-size:20px;line-height:1">&times;</span>
+      <div><div id="lm-title" style="font-size:15px;font-weight:700;color:#e6edf3"></div>
+           <div id="lm-sub" style="font-size:12px;color:#8b949e;margin-top:3px"></div></div>
+      <span onclick="closeLM()" style="cursor:pointer;color:#8b949e;font-size:22px;line-height:1">&times;</span>
     </div>
-    <form id="lm-form" onsubmit="submitLogin(event)">
-      <input type="hidden" id="lm-ip" name="ip">
-      <input type="hidden" id="lm-port" name="port">
-      <input type="hidden" id="lm-vtype" name="vendor_type">
-      <input type="hidden" id="lm-redirect" name="redirect_to">
-      <div id="lm-user-row" style="margin-bottom:12px">
-        <label style="font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:5px">Username</label>
-        <input id="lm-username" name="username" type="text" autocomplete="off" autocorrect="off" autocapitalize="off"
-          style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;padding:8px 10px;outline:none">
-      </div>
-      <div style="margin-bottom:16px">
-        <label style="font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:5px">Password</label>
-        <input id="lm-password" name="password" type="password" autocomplete="new-password"
-          style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;padding:8px 10px;outline:none">
-        <div id="lm-hint" style="font-size:11px;color:#6e7681;margin-top:4px"></div>
-      </div>
-      <div id="lm-error" style="display:none;background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.4);border-radius:6px;padding:8px 10px;font-size:12px;color:#f85149;margin-bottom:12px"></div>
-      <button type="submit" id="lm-btn"
-        style="width:100%;padding:10px;background:#238636;border:1px solid #2ea043;border-radius:6px;color:#fff;font-size:14px;font-weight:500;cursor:pointer">
-        Connect
-      </button>
-    </form>
+    <div id="lm-urow" style="margin-bottom:12px">
+      <div style="font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Username</div>
+      <input id="lm-u" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;padding:8px 10px;outline:none;box-sizing:border-box">
+    </div>
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px">Password</div>
+      <input id="lm-p" type="password" autocomplete="new-password" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;padding:8px 10px;outline:none;box-sizing:border-box">
+    </div>
+    <div id="lm-err" style="display:none;background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.4);border-radius:6px;padding:8px 10px;font-size:12px;color:#f85149;margin-bottom:12px"></div>
+    <button id="lm-btn" onclick="doLogin()" style="width:100%;padding:10px;background:#238636;border:1px solid #2ea043;border-radius:6px;color:#fff;font-size:14px;font-weight:500;cursor:pointer">Connect</button>
   </div>
 </div>
 <script>
-var _profiles={};
-fetch("/api/profiles").then(r=>r.json()).then(ps=>{ps.forEach(p=>{_profiles[p.vendor_type]=p;});});
+var _profs={},_lmip="",_lmport=0,_lmvt="",_lmredir="";
+fetch("/api/profiles").then(function(r){return r.json();}).then(function(ps){ps.forEach(function(p){_profs[p.vendor_type]=p;});});
 
-function openLoginModal(ip,port,vtype,mac){
-  var p=_profiles[vtype]||{};
-  var b=window.location.href;
-  if(!b.endsWith("/")) b+="/";
-
-  // For browser_form auth (Yealink, FreePBX) — just open the device
+function showLogin(ip,port,vt){
+  var p=_profs[vt]||{};
+  var b=window.location.href; if(!b.endsWith("/")) b+="/";
   if(p.auth_type==="browser_form"){
-    if(vtype==="freepbx"){
-      window.open(b+"device/"+window._vpnIp+"/80/pbx/"+ip+"/","_blank");
-    } else {
-      var proto=p.protocol||"http";
-      var lport=(proto==="https")?443:port;
-      window.open(b+"device/"+ip+"/"+lport+"/","_blank");
-    }
+    if(vt==="freepbx") window.open(b+"device/"+window._vpnIp+"/80/pbx/"+ip+"/","_blank");
+    else window.open(b+"device/"+ip+"/"+((p.protocol==="https")?443:port)+"/","_blank");
     return;
   }
-
-  // For digest auth — open device directly, browser handles auth challenge
-  if(p.auth_type==="digest"){
-    window.open(b+"device/"+ip+"/"+port+"/","_blank");
-    return;
-  }
-
-  // For form auth — show modal
-  document.getElementById("lm-title").textContent="Login — "+(p.display_name||vtype);
+  if(p.auth_type==="digest"){ window.open(b+"device/"+ip+"/"+port+"/","_blank"); return; }
+  _lmip=ip; _lmport=port; _lmvt=vt; _lmredir=b+"device/"+ip+"/"+port+"/";
+  document.getElementById("lm-title").textContent="Login — "+(p.display_name||vt);
   document.getElementById("lm-sub").textContent=ip+":"+port;
-  document.getElementById("lm-ip").value=ip;
-  document.getElementById("lm-port").value=port;
-  document.getElementById("lm-vtype").value=vtype;
-  document.getElementById("lm-redirect").value=b+"device/"+ip+"/"+port+"/";
-
-  // Username field
-  var userRow=document.getElementById("lm-user-row");
-  if(p.password_only){
-    userRow.style.display="none";
-  } else {
-    userRow.style.display="block";
-    document.getElementById("lm-username").value=p.default_username||"admin";
-  }
-
-  // Password
-  document.getElementById("lm-password").value=p.default_password||"";
-
-  // Hint
-  var hint=document.getElementById("lm-hint");
-  hint.textContent=p.password_hint||"";
-
-  document.getElementById("lm-error").style.display="none";
+  var ur=document.getElementById("lm-urow");
+  if(p.password_only){ ur.style.display="none"; }
+  else { ur.style.display="block"; document.getElementById("lm-u").value=p.default_username||""; }
+  document.getElementById("lm-p").value=p.default_password||"";
+  document.getElementById("lm-err").style.display="none";
   document.getElementById("lm-btn").textContent="Connect";
-
-  var modal=document.getElementById("login-modal");
-  modal.style.display="flex";
-
-  setTimeout(function(){
-    var f=p.password_only?document.getElementById("lm-password"):document.getElementById("lm-username");
-    if(f) f.focus();
-  },50);
+  document.getElementById("lm-btn").disabled=false;
+  var m=document.getElementById("lm"); m.style.display="flex";
+  setTimeout(function(){ var f=p.password_only?document.getElementById("lm-p"):document.getElementById("lm-u"); if(f) f.focus(); },50);
 }
-
-function closeLoginModal(){
-  document.getElementById("login-modal").style.display="none";
-}
-
-function submitLogin(e){
-  e.preventDefault();
-  var ip=document.getElementById("lm-ip").value;
-  var port=document.getElementById("lm-port").value;
-  var vtype=document.getElementById("lm-vtype").value;
-  var redirect=document.getElementById("lm-redirect").value;
+function closeLM(){ document.getElementById("lm").style.display="none"; }
+function doLogin(){
+  var p=_profs[_lmvt]||{};
   var btn=document.getElementById("lm-btn");
-  var err=document.getElementById("lm-error");
-
-  btn.textContent="Connecting...";
-  btn.disabled=true;
-  err.style.display="none";
-
-  var fd=new FormData(document.getElementById("lm-form"));
-
-  fetch("/device-login/"+ip+"/"+port,{method:"POST",body:fd})
+  var err=document.getElementById("lm-err");
+  btn.textContent="Connecting..."; btn.disabled=true; err.style.display="none";
+  var fd=new FormData();
+  fd.append("vendor_type",_lmvt);
+  fd.append("redirect_to",_lmredir);
+  if(!p.password_only) fd.append("username",document.getElementById("lm-u").value);
+  fd.append("password",document.getElementById("lm-p").value);
+  fetch("/device-login/"+_lmip+"/"+_lmport,{method:"POST",body:fd})
     .then(function(r){
-      if(r.ok||r.redirected){
-        closeLoginModal();
-        window.open(redirect,"_blank");
-      } else {
-        return r.text().then(function(t){
-          err.textContent=t||"Login failed";
-          err.style.display="block";
-          btn.textContent="Connect";
-          btn.disabled=false;
-        });
-      }
+      closeLM();
+      window.open(_lmredir,"_blank");
     })
     .catch(function(ex){
-      err.textContent="Connection error: "+ex;
-      err.style.display="block";
-      btn.textContent="Connect";
-      btn.disabled=false;
+      err.textContent="Error: "+ex; err.style.display="block";
+      btn.textContent="Connect"; btn.disabled=false;
     });
 }
-
-// Close modal on backdrop click
-document.getElementById("login-modal").addEventListener("click",function(e){
-  if(e.target===this) closeLoginModal();
-});
+document.getElementById("lm").addEventListener("click",function(e){ if(e.target===this) closeLM(); });
 </script>
-</script></body></html>"""
+</body></html>"""
 
 # ── Routes ──────────────────────────────────────────────────────────────────────
 @app.route("/")
@@ -785,63 +710,6 @@ def device_proxy(ip, port, subpath=""):
         return body, resp.status_code, headers
     except Exception as e:
         return f"Could not reach {ip}:{port} — {e}", 503
-
-
-@app.route("/api/profiles")
-def api_profiles():
-    return _json.dumps(load_profiles()), 200, {"Content-Type": "application/json"}
-
-
-@app.route("/device-login/<ip>/<int:port>", methods=["POST"])
-def device_login(ip, port):
-    """
-    Handle device login for form-based auth.
-    POSTs credentials to the device, returns redirect with session cookie.
-    """
-    import requests as _lr
-    from flask import request as _req, Response as _LResp
-
-    username = _req.form.get("username", "")
-    password = _req.form.get("password", "")
-    vendor_type = _req.form.get("vendor_type", "")
-    redirect_to = _req.form.get("redirect_to", f"/device/{ip}/{port}/")
-
-    profile = get_profile(vendor_type)
-    if not profile:
-        return f"No profile found for vendor: {vendor_type}", 400
-
-    scheme    = profile.get("protocol", "http")
-    login_url = f"{scheme}://{ip}:{port}{profile['login_url']}"
-    auth_type = profile.get("auth_type", "form")
-
-    # Build POST data
-    post_data = {}
-    if profile.get("username_field") and username:
-        post_data[profile["username_field"]] = username
-    if profile.get("password_field") and password:
-        post_data[profile["password_field"]] = password
-    # Add any extra static fields
-    for k, v in profile.get("extra_fields", {}).items():
-        post_data[k] = v
-
-    try:
-        resp = _lr.post(
-            login_url,
-            data=post_data,
-            timeout=10,
-            verify=False,
-            allow_redirects=False,
-        )
-        # Build redirect response with device session cookies forwarded
-        flask_resp = _LResp("", status=302)
-        flask_resp.headers["Location"] = redirect_to
-        # Forward all Set-Cookie headers from device to browser
-        for k, v in resp.raw.headers.items():
-            if k.lower() == "set-cookie":
-                flask_resp.headers.add("Set-Cookie", v)
-        return flask_resp
-    except Exception as e:
-        return f"Login failed: {e}", 503
 
 if __name__=="__main__":
     if is_tunnel_up():
