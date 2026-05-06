@@ -1,0 +1,100 @@
+[
+  {
+    "vendor_type": "grandstream",
+    "display_name": "Grandstream",
+    "oui_prefixes": [
+      "00:0B:82"
+    ],
+    "protocol": "http",
+    "auth_type": "form",
+    "login_url": "/dologin.htm",
+    "username_field": null,
+    "password_field": "P2",
+    "extra_fields": {
+      "gnkey": "0b82"
+    },
+    "session_cookie": "SessionId",
+    "button_label": "Open Grandstream",
+    "login_button_label": "Login",
+    "default_username": null,
+    "default_password": "admin",
+    "password_only": true
+  },
+  {
+    "vendor_type": "yealink",
+    "display_name": "Yealink",
+    "oui_prefixes": [
+      "00:15:65"
+    ],
+    "protocol": "https",
+    "auth_type": "browser_form",
+    "login_url": "/servlet?m=mod_listener&p=login&q=loginForm&jumpto=status",
+    "username_field": "username",
+    "password_field": "password",
+    "extra_fields": {},
+    "session_cookie": "JSESSIONID",
+    "button_label": "Open Yealink",
+    "login_button_label": "Login",
+    "default_username": "admin",
+    "default_password": "admin",
+    "password_only": false
+  },
+  {
+    "vendor_type": "fanvil",
+    "display_name": "ClearlyIP",
+    "oui_prefixes": [
+      "70:B3:D5",
+      "20:0A:0D"
+    ],
+    "protocol": "http",
+    "auth_type": "digest",
+    "login_url": "/",
+    "username_field": "username",
+    "password_field": "password",
+    "extra_fields": {},
+    "session_cookie": null,
+    "button_label": "Open ClearlyIP",
+    "login_button_label": "Login",
+    "default_username": "admin",
+    "default_password": "admin",
+    "password_only": false
+  },
+  {
+    "vendor_type": "atcom",
+    "display_name": "Atcom",
+    "oui_prefixes": [
+      "80:82:87"
+    ],
+    "protocol": "http",
+    "auth_type": "digest",
+    "login_url": "/",
+    "username_field": "username",
+    "password_field": "password",
+    "extra_fields": {},
+    "session_cookie": null,
+    "button_label": "Open Atcom",
+    "login_button_label": "Login",
+    "default_username": "admin",
+    "default_password": "admin",
+    "password_only": false
+  },
+  {
+    "vendor_type": "freepbx",
+    "display_name": "FreePBX",
+    "oui_prefixes": [
+      "00:E0:70"
+    ],
+    "protocol": "http",
+    "auth_type": "browser_form",
+    "login_url": "/admin/config.php",
+    "username_field": "username",
+    "password_field": "password",
+    "extra_fields": {},
+    "session_cookie": "PHPSESSID",
+    "button_label": "Open Nimbus",
+    "login_button_label": "Login",
+    "default_username": "pbxadmin",
+    "default_password": null,
+    "password_only": false
+  }
+]

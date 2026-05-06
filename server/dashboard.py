@@ -268,7 +268,7 @@ main{max-width:960px;margin:0 auto;padding:28px 20px}
   <div class="nav">
     <span class="nu">{{ username }}</span>
     <span class="sep"> | </span>
-    {% if is_admin %}<a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a>{% endif %}
+    {% if is_admin %}<a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a><a href="/admin/audit">Audit Log</a>{% endif %}
     <a href="/logout">Sign out</a>
   </div>
 </header>
@@ -437,7 +437,7 @@ input:focus,select:focus{border-color:var(--ac)}
   <div class="logo"><img src="/static/logo.png" style="height:36px;vertical-align:middle;margin-right:8px"> Bridge_Phone</div>
   <div class="nav">
     <span class="nu">{{ username }}</span><span class="sep"> | </span>
-    <a href="/">Dashboard</a><a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a>
+    <a href="/">Dashboard</a><a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a><a href="/admin/audit">Audit Log</a>
     <a href="/logout">Sign out</a>
   </div>
 </header>
