@@ -534,7 +534,8 @@ function doLogin(){
   fd.append("redirect_to",_lmredir);
   if(!p.password_only) fd.append("username",document.getElementById("lm-u").value);
   fd.append("password",document.getElementById("lm-p").value);
-  fetch("/device-login/"+_lmip+"/"+_lmport,{method:"POST",body:fd})
+  var _b=window.location.href; if(!_b.endsWith("/")) _b+="/";
+  fetch(_b+"device-login/"+_lmip+"/"+_lmport,{method:"POST",body:fd})
     .then(function(r){
       closeLM();
       window.open(_lmredir,"_blank");
@@ -710,6 +711,44 @@ def device_proxy(ip, port, subpath=""):
         return body, resp.status_code, headers
     except Exception as e:
         return f"Could not reach {ip}:{port} — {e}", 503
+
+
+
+@app.route("/api/profiles")
+def api_profiles():
+    return _json.dumps(load_profiles()), 200, {"Content-Type": "application/json"}
+
+
+@app.route("/device-login/<ip>/<int:port>", methods=["POST"])
+def device_login(ip, port):
+    import requests as _lr
+    from flask import request as _req, Response as _LResp
+    username    = _req.form.get("username", "")
+    password    = _req.form.get("password", "")
+    vendor_type = _req.form.get("vendor_type", "")
+    redirect_to = _req.form.get("redirect_to", "/device/{}/{}/".format(ip, port))
+    profile = get_profile(vendor_type)
+    if not profile:
+        return "No profile for vendor: {}".format(vendor_type), 400
+    scheme    = profile.get("protocol", "http")
+    login_url = "{}://{}:{}{}".format(scheme, ip, port, profile["login_url"])
+    post_data = {}
+    if profile.get("username_field") and username:
+        post_data[profile["username_field"]] = username
+    if profile.get("password_field") and password:
+        post_data[profile["password_field"]] = password
+    for k, v in profile.get("extra_fields", {}).items():
+        post_data[k] = v
+    try:
+        resp = _lr.post(login_url, data=post_data, timeout=10, verify=False, allow_redirects=False)
+        flask_resp = _LResp("", status=302)
+        flask_resp.headers["Location"] = redirect_to
+        for k, v in resp.raw.headers.items():
+            if k.lower() == "set-cookie":
+                flask_resp.headers.add("Set-Cookie", v)
+        return flask_resp
+    except Exception as e:
+        return "Login failed: {}".format(e), 503
 
 if __name__=="__main__":
     if is_tunnel_up():
