@@ -538,8 +538,7 @@ function doLogin(){
   fetch(_b+"device-login/"+_lmip+"/"+_lmport,{method:"POST",body:fd})
     .then(function(r){
       closeLM();
-      var _b2=window.location.href; if(!_b2.endsWith("/")) _b2+="/";
-      window.open(_b2+_lmredir,"_blank");
+      window.open(_lmredir,"_blank");
     })
     .catch(function(ex){
       err.textContent="Error: "+ex; err.style.display="block";
@@ -742,8 +741,7 @@ def device_login(ip, port):
         post_data[k] = v
     try:
         resp = _lr.post(login_url, data=post_data, timeout=10, verify=False, allow_redirects=False)
-        flask_resp = _LResp("", status=302)
-        flask_resp.headers["Location"] = redirect_to
+        flask_resp = _LResp("ok", status=200)
         for k, v in resp.raw.headers.items():
             if k.lower() == "set-cookie":
                 flask_resp.headers.add("Set-Cookie", v)
