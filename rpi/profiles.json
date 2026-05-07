@@ -24,9 +24,10 @@
     "vendor_type": "yealink",
     "display_name": "Yealink",
     "oui_prefixes": [
-      "00:15:65"
+      "00:15:65",
+      "00:15:77"
     ],
-    "protocol": "https",
+    "protocol": "http",
     "auth_type": "browser_form",
     "login_url": "/servlet?m=mod_listener&p=login&q=loginForm&jumpto=status",
     "username_field": "username",
@@ -95,6 +96,25 @@
     "login_button_label": "Login",
     "default_username": "pbxadmin",
     "default_password": null,
+    "password_only": false
+  },
+  {
+    "vendor_type": "yealink_t48s",
+    "display_name": "Yealink T48S",
+    "oui_prefixes": [
+      "80:5E:C0"
+    ],
+    "protocol": "https",
+    "auth_type": "browser_form",
+    "login_url": "/servlet?m=mod_listener&p=login&q=loginForm&jumpto=status",
+    "username_field": "username",
+    "password_field": "password",
+    "extra_fields": {},
+    "session_cookie": "JSESSIONID",
+    "button_label": "Open Yealink T48S",
+    "login_button_label": "Login",
+    "default_username": "admin",
+    "default_password": "admin",
     "password_only": false
   }
 ]
