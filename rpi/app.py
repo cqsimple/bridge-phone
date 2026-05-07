@@ -188,6 +188,8 @@ def detect_vendor(endpoints, mac=""):
             return "yealink"
         if "grandstream" in title:
             return "grandstream"
+        if "loading web application" in title:
+            return "grandstream_gxp"
         if "atcom" in title or "ip phone web configuration" in title:
             return "atcom"
         if "fanvil" in title or "document error" in title:
@@ -457,8 +459,8 @@ function render(sc=false){
             <span class="ea">↗</span></a>`).join("")}
         ${(()=>{
           const vt=d.vendor_type;
-          const labels={"freepbx":"Open Nimbus","yealink":"Open Yealink","yealink_t48s":"Open Yealink T48S","grandstream":"Open Grandstream","fanvil":"Open ClearlyIP","atcom":"Open Atcom"};
-          const colors={"freepbx":"rgba(63,185,80,.09);border-color:rgba(63,185,80,.3);color:#3fb950","yealink":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","yealink_t48s":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","grandstream":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","fanvil":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","atcom":"rgba(210,153,34,.09);border-color:rgba(210,153,34,.3);color:#d29922"};
+          const labels={"freepbx":"Open Nimbus","yealink":"Open Yealink","yealink_t48s":"Open Yealink T48S","grandstream":"Open Grandstream","grandstream_gxp":"Open Grandstream","fanvil":"Open ClearlyIP","atcom":"Open Atcom"};
+          const colors={"freepbx":"rgba(63,185,80,.09);border-color:rgba(63,185,80,.3);color:#3fb950","yealink":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","yealink_t48s":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","grandstream":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","grandstream_gxp":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","fanvil":"rgba(88,166,255,.09);border-color:rgba(88,166,255,.3);color:#58a6ff","atcom":"rgba(210,153,34,.09);border-color:rgba(210,153,34,.3);color:#d29922"};
           if(!vt||!labels[vt]) return "";
           const ob=`<a class="el" href="javascript:void(0)" onclick="openNimbus('${d.ip}','${vt}')" style="background:${colors[vt]};margin-top:4px"><span>&#x260E;</span><span class="et">${labels[vt]}</span><span class="ea">&#x2197;</span></a>`;
           const lb=`<a class="el" href="javascript:void(0)" onclick="showLogin('${d.ip}',${d.port||80},'${vt}')" style="background:rgba(255,165,0,.09);border-color:rgba(255,165,0,.3);color:#d4a017;margin-top:4px"><span>&#x1F511;</span><span class="et">Login</span><span class="ea">&#x2197;</span></a>`;

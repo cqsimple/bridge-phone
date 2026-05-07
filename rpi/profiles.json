@@ -116,5 +116,24 @@
     "default_username": "admin",
     "default_password": "admin",
     "password_only": false
+  },
+  {
+    "vendor_type": "grandstream_gxp",
+    "display_name": "Grandstream GXP",
+    "oui_prefixes": [
+      "00:0B:82"
+    ],
+    "protocol": "http",
+    "auth_type": "browser_form",
+    "login_url": "/",
+    "username_field": "username",
+    "password_field": "password",
+    "extra_fields": {},
+    "session_cookie": null,
+    "button_label": "Open Grandstream",
+    "login_button_label": "Login",
+    "default_username": "admin",
+    "default_password": "admin",
+    "password_only": false
   }
 ]
