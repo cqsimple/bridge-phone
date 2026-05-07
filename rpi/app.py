@@ -530,6 +530,10 @@ function showLogin(ip,port,vt){
 }
 function closeLM(){ document.getElementById("lm").style.display="none"; }
 function doLogin(){
+  // Clear any stale device session cookies before logging in
+  document.cookie="SessionId=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+  document.cookie="JSESSIONID=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+  document.cookie="PHPSESSID=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
   var p=_profs[_lmvt]||{};
   var btn=document.getElementById("lm-btn");
   var err=document.getElementById("lm-err");
