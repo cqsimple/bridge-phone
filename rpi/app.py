@@ -17,7 +17,7 @@ app = Flask(__name__)
 # ── Config ─────────────────────────────────────────────────────────────────────
 SCAN_WORKERS  = 50
 HTTP_TIMEOUT  = 1.5
-HTTP_PORTS    = [80, 8080, 443, 8443, 8888, 7080]
+HTTP_PORTS    = [80, 8080, 8888, 7080]
 VPN_IFACE     = "tun0"
 POLL_INTERVAL = 5    # seconds between tun0 state polls
 SCAN_COOLDOWN = 15   # seconds after tunnel-up before auto-scan fires
