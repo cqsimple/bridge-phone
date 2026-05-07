@@ -477,6 +477,8 @@ function openNimbus(ip, vtype){
   if(!b.endsWith('/')) b+='/';
   if(vtype === 'freepbx'){
     window.location.href=b+'device/'+window._vpnIp+'/80/pbx/'+ip+'/';
+  } else if(vtype === 'yealink_t48s'){
+    window.location.href=b+'device/'+ip+'/443/';
   } else {
     window.location.href=b+'device/'+ip+'/80/';
   }
