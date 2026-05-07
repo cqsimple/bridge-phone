@@ -104,7 +104,7 @@
     "oui_prefixes": [
       "80:5E:C0"
     ],
-    "protocol": "https",
+    "protocol": "http",
     "auth_type": "browser_form",
     "login_url": "/servlet?m=mod_listener&p=login&q=loginForm&jumpto=status",
     "username_field": "username",
