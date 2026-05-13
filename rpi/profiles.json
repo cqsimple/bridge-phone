@@ -6,8 +6,8 @@
       "00:0B:82"
     ],
     "protocol": "http",
-    "auth_type": "form",
-    "login_url": "/dologin.htm",
+    "auth_type": "browser_form",
+    "login_url": "/",
     "username_field": null,
     "password_field": "P2",
     "extra_fields": {
