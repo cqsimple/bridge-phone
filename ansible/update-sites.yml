@@ -41,6 +41,10 @@
         name: nginx
         state: reloaded
 
+    - name: Wait for device browser to start
+      pause:
+        seconds: 3
+
     - name: Check device browser status
       shell: systemctl is-active device-browser
       register: service_status
