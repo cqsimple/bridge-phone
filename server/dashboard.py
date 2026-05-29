@@ -34,6 +34,29 @@ def init_db():
             user_id INTEGER NOT NULL,
             site_name TEXT NOT NULL,
             PRIMARY KEY(user_id,site_name));
+        CREATE TABLE IF NOT EXISTS vps_sites(
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT UNIQUE NOT NULL,
+            label       TEXT NOT NULL,
+            ip          TEXT NOT NULL,
+            ssh_user    TEXT NOT NULL DEFAULT 'root',
+            ssh_password TEXT NOT NULL,
+            web_port    INTEGER NOT NULL DEFAULT 80,
+            notes       TEXT,
+            created     TEXT DEFAULT (datetime('now')));
+        CREATE TABLE IF NOT EXISTS audit_log(
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            username    TEXT NOT NULL,
+            event_type  TEXT NOT NULL,
+            site_name   TEXT NOT NULL,
+            device_ip   TEXT,
+            device_port TEXT,
+            vendor      TEXT,
+            url_path    TEXT,
+            started_at  TEXT NOT NULL,
+            last_seen   TEXT NOT NULL,
+            duration_s  INTEGER NOT NULL DEFAULT 0);
     """)
     if not db.execute("SELECT 1 FROM users").fetchone():
         db.execute("INSERT INTO users(username,password,is_admin)VALUES(?,?,1)",
@@ -41,6 +64,119 @@ def init_db():
         print("[db] Created admin/admin")
     db.commit();db.close()
 
+
+# ════════════════════════════════════════════════════════════
+# AUDIT LOG
+# ════════════════════════════════════════════════════════════
+import threading as _ath
+import queue as _aq
+from datetime import datetime as _adt, timezone as _atz, timedelta as _atd
+
+_audit_queue   = _aq.Queue()
+_active_visits = {}
+_VISIT_IDLE    = 300
+
+def _anow():
+    return _adt.now(_atz.utc)
+
+def _aiso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def _afmt_est(iso):
+    try:
+        dt = _adt.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_atz.utc)
+        try:
+            from zoneinfo import ZoneInfo
+            dt = dt.astimezone(ZoneInfo("America/New_York"))
+        except Exception:
+            offset = -4 if 3 < dt.month < 11 else -5
+            dt = dt + _atd(hours=offset)
+        return dt.strftime("%Y-%m-%d %I:%M:%S %p ET")
+    except Exception:
+        return iso
+
+def _audit_worker():
+    import sqlite3 as _sq
+    while True:
+        try:
+            msg = _audit_queue.get(timeout=10)
+        except _aq.Empty:
+            _flush_stale_visits()
+            continue
+        if msg is None:
+            break
+        try:
+            conn = _sq.connect(DB_FILE)
+            if msg["op"] == "insert":
+                cur = conn.execute(
+                    "INSERT INTO audit_log(user_id,username,event_type,site_name,"
+                    "device_ip,device_port,vendor,url_path,started_at,last_seen,duration_s)"
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,0)",
+                    (msg["user_id"],msg["username"],msg["event_type"],msg["site_name"],
+                     msg["device_ip"],msg["device_port"],msg["vendor"],msg.get("url_path"),
+                     msg["started_at"],msg["started_at"]))
+                conn.commit()
+                _active_visits[msg["visit_key"]] = {
+                    "started_at":msg["now"],"last_seen":msg["now"],"audit_id":cur.lastrowid}
+            elif msg["op"] == "update":
+                conn.execute("UPDATE audit_log SET last_seen=?,duration_s=? WHERE id=?",
+                             (msg["last_seen"],msg["duration_s"],msg["audit_id"]))
+                conn.commit()
+            elif msg["op"] == "purge":
+                conn.execute("DELETE FROM audit_log WHERE started_at < ?",(msg["cutoff"],))
+                conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[audit worker] {e}", flush=True)
+
+def _flush_stale_visits():
+    cutoff = _anow() - _atd(seconds=_VISIT_IDLE)
+    stale  = [k for k,v in _active_visits.items() if v["last_seen"] < cutoff]
+    for k in stale:
+        v = _active_visits.pop(k)
+        dur = int((v["last_seen"] - v["started_at"]).total_seconds())
+        _audit_queue.put({"op":"update","audit_id":v["audit_id"],
+                          "last_seen":_aiso(v["last_seen"]),"duration_s":dur})
+
+def record_audit_event(event_type, site_name, device_ip=None, device_port=None,
+                       vendor=None, url_path=None):
+    try:
+        uid      = session.get("user_id")
+        username = session.get("username","unknown")
+        if not uid:
+            return
+        sites    = load_sites()
+        site_obj = next((s for s in sites if s["name"] == site_name), None)
+        site_label = site_obj.get("label", site_name) if site_obj else site_name
+        sid       = request.cookies.get("session", str(uid))
+        visit_key = (sid, site_label, device_ip or "", device_port or "")
+        now       = _anow()
+        if visit_key in _active_visits:
+            v = _active_visits[visit_key]
+            v["last_seen"] = now
+            if v.get("audit_id"):
+                dur = int((now - v["started_at"]).total_seconds())
+                _audit_queue.put({"op":"update","audit_id":v["audit_id"],
+                                  "last_seen":_aiso(now),"duration_s":dur})
+        else:
+            _active_visits[visit_key] = {"started_at":now,"last_seen":now,"audit_id":None}
+            _audit_queue.put({"op":"insert","visit_key":visit_key,"now":now,
+                              "user_id":uid,"username":username,"event_type":event_type,
+                              "site_name":site_label,"device_ip":device_ip,
+                              "device_port":device_port,"vendor":vendor,
+                              "url_path":url_path,"started_at":_aiso(now)})
+    except Exception as e:
+        print(f"[audit] {e}", flush=True)
+
+def purge_old_audit():
+    cutoff = _aiso(_anow() - _atd(days=183))
+    _audit_queue.put({"op":"purge","cutoff":cutoff})
+
+def start_audit_worker():
+    t = _ath.Thread(target=_audit_worker, daemon=True, name="audit-worker")
+    t.start()
+
+# ════════════════════════════════════════════════════════════
 def login_required(f):
     @wraps(f)
     def d(*a,**kw):
@@ -150,12 +286,15 @@ def refresh_cache():
             e["connected_since"]=info["connected_since"]
             e["bytes_rx"]=fmt_bytes(info["bytes_rx"])
             e["bytes_tx"]=fmt_bytes(info["bytes_tx"])
-            try:
-                r=requests.get(f"http://{vpn_ip}:{DEVICE_PORT}/api/state",timeout=3)
-                st=r.json()
-                e.update(browser_up=True,scanning=st.get("scanning",False),
-                         device_count=len(st.get("devices",[])),last_scan=st.get("last_scan",0))
-            except:pass
+            if site.get("type") != "freepbx_vps":
+                try:
+                    r=requests.get(f"http://{vpn_ip}:{DEVICE_PORT}/api/state",timeout=3)
+                    st=r.json()
+                    e.update(browser_up=True,scanning=st.get("scanning",False),
+                             device_count=len(st.get("devices",[])),last_scan=st.get("last_scan",0))
+                except:pass
+            else:
+                e.update(browser_up=True,device_count=1,site_type="freepbx_vps")
         updated[name]=e
     with _lock:
         _cache.clear();_cache.update(updated)
@@ -194,6 +333,9 @@ button:hover{opacity:.85}
 <div class="box">
   <div class="logo"><img src="/static/logo.png" style="height:36px;vertical-align:middle;margin-right:8px"> Bridge_Phone</div>
   <div class="sub">Sign in to your account</div>
+  <div style="background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);border-radius:6px;padding:10px 12px;margin-bottom:18px;font-size:.75rem;color:#d29922;line-height:1.5">
+    &#9888; Authorized personnel only. Unauthorized access to this system is prohibited. All activity is monitored and logged.
+  </div>
   {% if err %}<div class="err">{{ err }}</div>{% endif %}
   <form method="POST">
     <label>Username</label><input name="username" autofocus required>
@@ -268,7 +410,7 @@ main{max-width:960px;margin:0 auto;padding:28px 20px}
   <div class="nav">
     <span class="nu">{{ username }}</span>
     <span class="sep"> | </span>
-    {% if is_admin %}<a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a><a href="/admin/audit">Audit Log</a>{% endif %}
+    {% if is_admin %}<a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a><a href="/admin/vps-sites">VPS Sites</a><a href="/admin/audit">Audit Log</a>{% endif %}
     <a href="/logout">Sign out</a>
   </div>
 </header>
@@ -320,15 +462,23 @@ function load() {
         ? '<button class="btn bd" data-n="'+s.name+'" onclick="disc(this.dataset.n)">Disconnect</button>'
         : '';
       if(s.online && s.browser_up) {
-        chips += s.scanning
-          ? '<span class="chip sc">scanning...</span>'
-          : '<span class="chip ok">&#10003; '+s.device_count+' device'+(s.device_count!==1?'s':'')+'</span>';
-        if(s.last_scan) chips += '<span class="chip">scan '+ago(s.last_scan)+'</span>';
-        if(s.connected_since) chips += '<span class="chip">up '+s.connected_since+'</span>';
-        acts = '<a class="btn bp" href="/site/'+s.name+'/" target="_blank">Open</a>'
-             + ' <button class="btn bsc" data-n="'+s.name+'" onclick="scan(this.dataset.n)">Scan</button>'
-             + ' <button class="btn" style="background:rgba(255,255,255,.06);color:#e6edf3;border:1px solid #21262d" data-n="'+s.name+'" data-l="'+s.label+'" onclick="rename(this.dataset.n,this.dataset.l)" title="Rename">&#9998;</button>'
-             + ' ' + discBtn;
+        if(s.site_type === 'freepbx_vps') {
+          if(s.connected_since) chips += '<span class="chip">up '+s.connected_since+'</span>';
+          chips += '<span class="chip ok">&#10003; FreePBX VPS</span>';
+          acts = '<a class="btn bp" href="/site/'+s.name+'/" target="_blank">Open FreePBX</a>'
+               + ' <button class="btn" style="background:rgba(255,255,255,.06);color:#e6edf3;border:1px solid #21262d" data-n="'+s.name+'" data-l="'+s.label+'" onclick="rename(this.dataset.n,this.dataset.l)" title="Rename">&#9998;</button>'
+               + ' ' + discBtn;
+        } else {
+          chips += s.scanning
+            ? '<span class="chip sc">scanning...</span>'
+            : '<span class="chip ok">&#10003; '+s.device_count+' device'+(s.device_count!==1?'s':'')+'</span>';
+          if(s.last_scan) chips += '<span class="chip">scan '+ago(s.last_scan)+'</span>';
+          if(s.connected_since) chips += '<span class="chip">up '+s.connected_since+'</span>';
+          acts = '<a class="btn bp" href="/site/'+s.name+'/" target="_blank">Open</a>'
+               + ' <button class="btn bsc" data-n="'+s.name+'" onclick="scan(this.dataset.n)">Scan</button>'
+               + ' <button class="btn" style="background:rgba(255,255,255,.06);color:#e6edf3;border:1px solid #21262d" data-n="'+s.name+'" data-l="'+s.label+'" onclick="rename(this.dataset.n,this.dataset.l)" title="Rename">&#9998;</button>'
+               + ' ' + discBtn;
+        }
       } else if(s.online) {
         chips = '<span class="chip">Browser connecting...</span>';
         acts = '<a class="btn bp" href="/site/'+s.name+'/" target="_blank">Open</a>';
@@ -437,7 +587,7 @@ input:focus,select:focus{border-color:var(--ac)}
   <div class="logo"><img src="/static/logo.png" style="height:36px;vertical-align:middle;margin-right:8px"> Bridge_Phone</div>
   <div class="nav">
     <span class="nu">{{ username }}</span><span class="sep"> | </span>
-    <a href="/">Dashboard</a><a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a><a href="/admin/audit">Audit Log</a>
+    <a href="/">Dashboard</a><a href="/admin">Admin</a><a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a><a href="/admin/vps-sites">VPS Sites</a><a href="/admin/audit">Audit Log</a>
     <a href="/logout">Sign out</a>
   </div>
 </header>
@@ -740,6 +890,18 @@ def proxy_site(site_name, subpath=""):
     if "user_id" not in session:
         return redirect("/login")
     user = cu()
+    # ── Audit logging ─────────────────────────────────────────
+    _skip = (".css",".js",".png",".jpg",".jpeg",".ico",
+             ".woff",".woff2",".svg",".gif",".map",".ttf")
+    if subpath.startswith("device/"):
+        _dp = subpath.strip("/").split("/")
+        if len(_dp) >= 2 and (len(_dp) <= 3 or _dp[3:] == [""]):
+            record_audit_event("device_open", site_name,
+                               device_ip=_dp[1],
+                               device_port=_dp[2] if len(_dp) > 2 else "80")
+    elif not any(subpath.endswith(x) for x in _skip) and subpath == "":
+        record_audit_event("site_open", site_name)
+    # ── End audit logging ─────────────────────────────────────
     if site_name not in get_user_site_names(user["id"], user["is_admin"]):
         return "Access denied", 403
     site = next((s for s in load_sites() if s["name"] == site_name), None)
@@ -813,7 +975,7 @@ def proxy_site(site_name, subpath=""):
         content_type = resp.headers.get("Content-Type","") or resp.headers.get("ContentType","")
         print(f"[proxy] {subpath[:50]} ct={repr(content_type)} status={resp.status_code}", flush=True)
         body = resp.content
-        if ("text/html" in content_type or "text/html" in resp.headers.get("ContentType","") or "javascript" in content_type) and subpath.startswith("device/"):
+        if ("text/html" in content_type or "text/html" in resp.headers.get("ContentType","") or "javascript" in content_type or "text/css" in content_type) and subpath.startswith("device/"):
             import re as _re
             # Build correct base path for this device
             dev_parts = subpath.strip("/").split("/")
@@ -832,6 +994,14 @@ def proxy_site(site_name, subpath=""):
             body = body.replace(b"src='/", b"src='" + dev_base + b'/')
             # action= rewrite removed - base tag handles this
             body = body.replace(b'url(/', dev_base + b'/')
+            # Rewrite CSS relative ../paths (e.g. Grandstream GXP style.css)
+            if b'url("../' in body or b"url('../" in body or b'url(../' in body:
+                body = body.replace(b'url("../', b'url("' + dev_base + b'/')
+                body = body.replace(b"url('../", b"url('" + dev_base + b"/")
+                body = body.replace(b'url(../', b'url(' + dev_base + b'/')
+            # Rewrite GWT absolute paths in JavaScript (e.g. Grandstream GXP)
+            body = body.replace(b"='/style.css'", b"='" + dev_base + b"/style.css'")
+            body = body.replace(b'="/style.css"', b'="' + dev_base + b'/style.css"')
             # Rewrite cgi-bin absolute paths in HTML and JS
             body = body.replace(b"url: '/cgi-bin/", b"url: '" + dev_base + b"/cgi-bin/")
             body = body.replace(b'url: "/cgi-bin/', b'url: "' + dev_base + b'/cgi-bin/')
@@ -863,8 +1033,11 @@ def proxy_site(site_name, subpath=""):
             # Inject base tag AFTER rewrites to avoid double-rewriting
             # Skip base tag for pbx proxy requests - RPi already handles rewriting
             if "/pbx/" not in subpath:
-                body = body.replace(b'<head>', b'<head><base href="' + base + b'">', 1)
-                body = body.replace(b'<HEAD>', b'<HEAD><base href="' + base + b'">', 1)
+                import re as _bre
+                body = _bre.sub(
+                    b'(<head>|<HEAD>)',
+                    b'\1<base href="' + base + b'">',
+                    body, count=1)
             # Rewrite device endpoint links
             def rewrite_device_url(m):
                 ip = m.group(1).decode()
@@ -1712,7 +1885,819 @@ def api_update_sites():
     _t.Thread(target=run_update, daemon=True).start()
     return jsonify({"status": "started", "message": "Update started on all sites"})
 
+
+@app.route("/admin/audit")
+@login_required
+def audit_log_page():
+    if not session.get("is_admin"):
+        return redirect("/")
+    import csv, io
+    d          = get_db()
+    username_f = request.args.get("username", "").strip()
+    site_f     = request.args.get("site", "").strip()
+    date_from  = request.args.get("date_from", "").strip()
+    date_to    = request.args.get("date_to", "").strip()
+    export     = request.args.get("export") == "1"
+
+    q = "SELECT * FROM audit_log WHERE 1=1"
+    p = []
+    if username_f: q += " AND username LIKE ?";  p.append(f"%{username_f}%")
+    if site_f:     q += " AND site_name=?";      p.append(site_f)
+    if date_from:  q += " AND started_at >= ?";  p.append(date_from+"T00:00:00Z")
+    if date_to:    q += " AND started_at <= ?";  p.append(date_to+"T23:59:59Z")
+    q += " ORDER BY started_at DESC LIMIT 2000"
+
+    rows      = d.execute(q, p).fetchall()
+    all_users = [r[0] for r in d.execute("SELECT DISTINCT username FROM audit_log ORDER BY username").fetchall()]
+    all_sites = [r[0] for r in d.execute("SELECT DISTINCT site_name FROM audit_log ORDER BY site_name").fetchall()]
+    d.close()
+
+    if export:
+        out = io.StringIO()
+        w   = csv.writer(out)
+        w.writerow(["ID","User","Event","Site","Device IP","Port","Connected","Last Seen","Duration(s)","Duration"])
+        for r in rows:
+            m,s = divmod(r["duration_s"],60); h,m = divmod(m,60)
+            fmt = (f"{h}h {m}m {s}s" if h else f"{m}m {s}s")
+            w.writerow([r["id"],r["username"],r["event_type"],r["site_name"],
+                        r["device_ip"] or "",r["device_port"] or "",
+                        r["started_at"],r["last_seen"],r["duration_s"],fmt])
+        from flask import Response
+        return Response(out.getvalue(), mimetype="text/csv",
+            headers={"Content-Disposition":f"attachment; filename=audit_{_aiso(_anow())[:10]}.csv"})
+
+    def dfmt(s):
+        m,sec=divmod(s,60); h,m=divmod(m,60)
+        return (f"{h}h {m}m {sec}s" if h else f"{m}m {sec}s") if m else f"{sec}s"
+
+    def dcls(s):
+        return "dur-long" if s>=600 else ("dur-mid" if s>=60 else "dur-short")
+
+    rows_html = ""
+    for r in rows:
+        badge = ('<span class="badge bs">Site</span>' if r["event_type"]=="site_open"
+            else '<span class="badge bd">Device</span>')
+        ds = r["duration_s"]
+        rows_html += (
+            f"<tr><td><strong>{r['username']}</strong></td>"
+            f"<td>{badge}</td><td>{r['site_name']}</td>"
+            f"<td>{r['device_ip'] or '&#8212;'}</td>"
+            f"<td>{r['device_port'] or '&#8212;'}</td>"
+            f"<td style='white-space:nowrap'>{_afmt_est(r['started_at'])}</td>"
+            f"<td style='white-space:nowrap'>{_afmt_est(r['last_seen'])}</td>"
+            f"<td class='{dcls(ds)}'>{dfmt(ds)}</td></tr>"
+        )
+
+    uf  = "".join(f'<option value="{u}" {"selected" if u==username_f else ""}>{u}</option>' for u in all_users)
+    sf  = "".join(f'<option value="{s}" {"selected" if s==site_f else ""}>{s}</option>' for s in all_sites)
+    eqs = request.query_string.decode()
+    eqs = (eqs+"&export=1") if eqs else "export=1"
+    tot = len(rows)
+    so  = sum(1 for r in rows if r["event_type"]=="site_open")
+    do  = sum(1 for r in rows if r["event_type"]=="device_open")
+    uc  = len(set(r["username"] for r in rows))
+    sc  = len(set(r["site_name"] for r in rows))
+    empty = '<div class="empty"><div style="font-size:48px;opacity:.3">&#128203;</div><div>No records match your filters.</div></div>' if not rows else ""
+    tbl   = "" if not rows else (
+        '<div class="tw"><table>'
+        '<thead><tr><th>User</th><th>Event</th><th>Site</th>'
+        '<th>Device IP</th><th>Port</th>'
+        '<th>Connected</th><th>Last Seen</th><th>Duration</th></tr></thead>'
+        f'<tbody>{rows_html}</tbody></table></div>'
+    )
+
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Audit Log</title><style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}}
+header{{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:52px;background:#161b22;border-bottom:1px solid #30363d}}
+.logo{{font-weight:700;font-size:16px;color:#58a6ff}}
+.nav a{{color:#8b949e;text-decoration:none;font-size:13px;margin-left:16px;padding:4px 8px;border-radius:5px}}
+.nav a:hover{{color:#e6edf3;background:#21262d}}
+.nav a.act{{color:#58a6ff;background:rgba(88,166,255,.1)}}
+.wrap{{max-width:1400px;margin:0 auto;padding:28px 20px}}
+.ph{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px}}
+.ph h1{{font-size:20px;font-weight:700;color:#e6edf3}}
+.ph .sub{{font-size:12px;color:#8b949e;margin-top:3px}}
+.bex{{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#238636;border:1px solid #2ea043;border-radius:6px;color:#fff;font-size:13px;font-weight:500;text-decoration:none}}
+.bex:hover{{background:#2ea043}}
+.fb{{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:16px 20px;margin-bottom:20px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}}
+.fb label{{font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;display:flex;flex-direction:column;gap:5px}}
+.fb input,.fb select{{padding:7px 10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px;min-width:140px}}
+.fb input:focus,.fb select:focus{{outline:none;border-color:#58a6ff}}
+.bfi{{padding:8px 18px;background:#1f6feb;color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer}}
+.bfi:hover{{background:#388bfd}}
+.brs{{padding:8px 14px;background:#21262d;color:#8b949e;border:1px solid #30363d;border-radius:6px;font-size:13px;cursor:pointer;text-decoration:none}}
+.brs:hover{{background:#30363d;color:#e6edf3}}
+.sr{{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap}}
+.sc{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 20px;min-width:120px}}
+.sc .v{{font-size:22px;font-weight:700;color:#58a6ff}}
+.sc .l{{font-size:11px;color:#8b949e;margin-top:2px}}
+.tw{{overflow-x:auto;border-radius:10px;border:1px solid #30363d}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+thead th{{background:#1f4080;color:#e6edf3;padding:11px 14px;text-align:left;white-space:nowrap;font-weight:600}}
+tbody tr{{border-bottom:1px solid #21262d}}
+tbody tr:last-child{{border-bottom:none}}
+tbody tr:hover{{background:#161b22}}
+tbody td{{padding:10px 14px;vertical-align:middle;color:#c9d1d9}}
+.badge{{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}}
+.bs{{background:rgba(88,166,255,.15);color:#58a6ff}}
+.bd{{background:rgba(63,185,80,.15);color:#3fb950}}
+.dur-short{{color:#6e7681}}.dur-mid{{color:#d29922}}.dur-long{{color:#f85149;font-weight:600}}
+.empty{{text-align:center;padding:60px 20px;color:#6e7681}}
+</style></head><body>
+<header>
+  <div class="logo">&#127751; Bridge Phone</div>
+  <div class="nav">
+    <a href="/">Dashboard</a><a href="/admin">Admin</a>
+    <a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a>
+    <a href="/admin/audit" class="act">Audit Log</a><a href="/logout">Sign out</a>
+  </div>
+</header>
+<div class="wrap">
+  <div class="ph">
+    <div><h1>Audit Log</h1><div class="sub">Device access history &#8212; last 6 months</div></div>
+    <a class="bex" href="/admin/audit?{eqs}">&#11015; Export CSV</a>
+  </div>
+  <form class="fb" method="get">
+    <label>User<select name="username"><option value="">All users</option>{uf}</select></label>
+    <label>Site<select name="site"><option value="">All sites</option>{sf}</select></label>
+    <label>From<input type="date" name="date_from" value="{date_from}"></label>
+    <label>To<input type="date" name="date_to" value="{date_to}"></label>
+    <button type="submit" class="bfi">Filter</button>
+    <a href="/admin/audit" class="brs">Reset</a>
+  </form>
+  <div class="sr">
+    <div class="sc"><div class="v">{tot}</div><div class="l">Total events</div></div>
+    <div class="sc"><div class="v">{uc}</div><div class="l">Users</div></div>
+    <div class="sc"><div class="v">{so}</div><div class="l">Site opens</div></div>
+    <div class="sc"><div class="v">{do}</div><div class="l">Device opens</div></div>
+    <div class="sc"><div class="v">{sc}</div><div class="l">Sites accessed</div></div>
+  </div>
+  {empty}{tbl}
+</div></body></html>"""
+
+
+# ════════════════════════════════════════════════════════════
+# VPS SITES — SSH tunnel management
+# ════════════════════════════════════════════════════════════
+import subprocess as _sp
+import threading as _vth
+import time as _vtime
+
+_vps_tunnels = {}   # id -> {proc, local_port, started_at, last_used}
+_vps_sessions = {}  # id -> requests.Session()
+_vps_lock    = threading.Lock()
+_VPS_IDLE_TIMEOUT = 1800  # 30 minutes
+
+def _next_tunnel_port():
+    used = {v["local_port"] for v in _vps_tunnels.values()}
+    port = 19000
+    while port in used:
+        port += 1
+    return port
+
+def _start_tunnel(site_id, ip, ssh_user, ssh_password, web_port):
+    with _vps_lock:
+        if site_id in _vps_tunnels:
+            t = _vps_tunnels[site_id]
+            t["last_used"] = _vtime.time()
+            # Check tunnel still alive
+            if t.get("tunnel_obj") and t["tunnel_obj"].is_alive:
+                return t["local_port"]
+            # Tunnel dead - clean up
+            try:
+                t.get("tunnel_obj") and t["tunnel_obj"].stop()
+            except:
+                pass
+            del _vps_tunnels[site_id]
+        local_port = _next_tunnel_port()
+        try:
+            import shutil as _sh
+            sshpass = _sh.which("sshpass")
+            from sshtunnel import SSHTunnelForwarder as _SSTF
+            tunnel_obj = _SSTF(
+                ip,
+                ssh_username=ssh_user,
+                ssh_password=ssh_password,
+                local_bind_address=("127.0.0.1", local_port),
+                remote_bind_address=("127.0.0.1", web_port),
+                set_keepalive=10,
+            )
+            tunnel_obj.start()
+            _vtime.sleep(2)
+            if not tunnel_obj.is_alive:
+                tunnel_obj.stop()
+                return None
+            _vps_tunnels[site_id] = {
+                "tunnel_obj": tunnel_obj,
+                "proc": type("FakeProc", (), {"poll": lambda self: None, "terminate": lambda self: None})(),
+                "local_port": local_port,
+                "started_at": _vtime.time(), "last_used": _vtime.time()
+            }
+            if site_id in _vps_sessions:
+                del _vps_sessions[site_id]
+            return local_port
+            print(f"[vps tunnel] Starting: {cmd}", flush=True)
+            proc = _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            _vtime.sleep(4)
+            if proc.poll() is not None:
+                print(f"[vps tunnel] Process died with returncode={proc.returncode}", flush=True)
+                return None
+            # Verify port is actually listening
+            import socket as _sock
+            try:
+                _s = _sock.create_connection(("127.0.0.1", local_port), timeout=3)
+                _s.close()
+                print(f"[vps tunnel] Port {local_port} confirmed listening", flush=True)
+                # Port is up - register tunnel and return immediately
+                _vps_tunnels[site_id] = {
+                    "proc": proc, "local_port": local_port,
+                    "started_at": _vtime.time(), "last_used": _vtime.time()
+                }
+                if site_id in _vps_sessions:
+                    del _vps_sessions[site_id]
+                return local_port
+            except Exception as _se:
+                print(f"[vps tunnel] Port {local_port} not listening: {_se}", flush=True)
+                proc.terminate()
+                return None
+            _vtime.sleep(3)
+            if proc.poll() is not None:
+                print(f"[vps tunnel] Process died with returncode={proc.returncode}", flush=True)
+                return None
+            # Make a test connection to keep tunnel alive
+            try:
+                import socket as _sock
+                _s = _sock.create_connection(("127.0.0.1", local_port), timeout=2)
+                _s.close()
+            except:
+                pass
+            _vtime.sleep(2)
+            if proc.poll() is not None:
+                pass  # process died
+                print(f"[vps tunnel] Process died with returncode={proc.returncode}", flush=True)
+                return None
+            _vps_tunnels[site_id] = {
+                "proc": proc, "local_port": local_port,
+                "started_at": _vtime.time(), "last_used": _vtime.time()
+            }
+            # Clear any stale FreePBX session on new connection
+            if site_id in _vps_sessions:
+                del _vps_sessions[site_id]
+            return local_port
+        except Exception as e:
+            print(f"[vps tunnel] {e}", flush=True)
+            return None
+
+def _stop_tunnel(site_id):
+    with _vps_lock:
+        if site_id in _vps_tunnels:
+            try:
+                _vps_tunnels[site_id]["proc"].terminate()
+            except:
+                pass
+            del _vps_tunnels[site_id]
+
+def _tunnel_watchdog():
+    while True:
+        _vtime.sleep(10)
+        now = _vtime.time()
+        # Auto-close idle tunnels
+        with _vps_lock:
+            stale = [sid for sid, t in _vps_tunnels.items()
+                     if now - t["last_used"] > _VPS_IDLE_TIMEOUT]
+        for sid in stale:
+            print(f"[vps tunnel] auto-closing idle tunnel {sid}", flush=True)
+            _stop_tunnel(sid)
+        # Restart dead tunnels
+        with _vps_lock:
+            dead = [(sid, t) for sid, t in _vps_tunnels.items()
+                    if t["proc"].poll() is not None]
+        for sid, t in dead:
+            print(f"[vps tunnel] restarting dead tunnel {sid}", flush=True)
+            from flask import current_app
+            try:
+                db = get_db()
+                row = db.execute("SELECT ip, ssh_user, ssh_password, web_port FROM vps_sites WHERE id=?", (sid,)).fetchone()
+                db.close()
+                if row:
+                    new_port = _start_tunnel(sid, row["ip"], row["ssh_user"], row["ssh_password"], row["web_port"])
+            except Exception as _re:
+                print(f"[vps tunnel] restart failed: {_re}", flush=True)
+
+threading.Thread(target=_tunnel_watchdog, daemon=True).start()
+
+
+@app.route("/admin/vps-sites")
+@login_required
+def vps_sites_page():
+    if not session.get("is_admin"):
+        return redirect("/")
+    d    = get_db()
+    rows = d.execute("SELECT * FROM vps_sites ORDER BY label").fetchall()
+    d.close()
+
+    with _vps_lock:
+        active = dict(_vps_tunnels)
+
+    rows_html = ""
+    for r in rows:
+        sid      = r["id"]
+        tunnel   = active.get(sid)
+        if tunnel:
+            age     = int(_vtime.time() - tunnel["started_at"])
+            m, s    = divmod(age, 60)
+            age_str = str(m) + "m " + str(s) + "s"
+            status  = '<span class="vs-badge vs-on">&#9679; Connected (' + age_str + ')</span>'
+            actions = ('<a class="vb vb-open" href="/vps/' + str(sid) + '/fpbx-login"'
+                       ' target="_blank">Open FreePBX</a> '
+                       '<button class="vb vb-disc" onclick="vpsDisc(' + str(sid) + ')">Disconnect</button>')
+        else:
+            status  = '<span class="vs-badge vs-off">&#9679; Offline</span>'
+            actions = '<button class="vb vb-conn" onclick="vpsConn(' + str(sid) + ')">Connect</button>'
+        ssh_str  = r["ssh_user"] + "@" + r["ip"]
+        edit_fn  = ('editVps(' + str(sid) + ',"' + r["name"] + '","' + r["label"] + '","'
+                    + r["ip"] + '","' + r["ssh_user"] + '","' + str(r["web_port"]) + '","'
+                    + (r["notes"] or "") + '")' )
+        del_fn   = 'delVps(' + str(sid) + ',"'  + r["label"].replace('"', '&quot;') + '")'
+        rows_html += (
+            '<tr><td><strong>' + r["label"] + '</strong><br>'
+            '<span class="vsub">' + r["name"] + '</span></td>'
+            '<td>' + r["ip"] + '</td><td>' + str(r["web_port"]) + '</td>'
+            '<td><code class="vcode">' + ssh_str + '</code></td>'
+            '<td>' + status + '</td>'
+            '<td>' + actions
+            + ' <button class="vb vb-edit" onclick="' + edit_fn + '">Edit</button> '
+            + '<button class="vb vb-del" onclick="' + del_fn + '">Delete</button></td></tr>'
+        )
+
+
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>VPS Sites</title><style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}}
+header{{display:flex;align-items:center;justify-content:space-between;padding:0 24px;height:52px;background:#161b22;border-bottom:1px solid #30363d}}
+.logo{{font-weight:700;font-size:16px;color:#58a6ff}}
+.nav a{{color:#8b949e;text-decoration:none;font-size:13px;margin-left:16px;padding:4px 8px;border-radius:5px}}
+.nav a:hover,.nav a.act{{color:#e6edf3;background:#21262d}}
+.nav a.act{{color:#58a6ff;background:rgba(88,166,255,.1)}}
+.wrap{{max-width:1300px;margin:0 auto;padding:28px 20px}}
+.ph{{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}}
+.ph h1{{font-size:20px;font-weight:700;color:#e6edf3}}
+.ph .sub{{font-size:12px;color:#8b949e;margin-top:3px}}
+.badd{{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;background:#238636;border:1px solid #2ea043;border-radius:6px;color:#fff;font-size:13px;font-weight:500;cursor:pointer;border:none}}
+.badd:hover{{background:#2ea043}}
+.tw{{overflow-x:auto;border-radius:10px;border:1px solid #30363d}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+thead th{{background:#1f4080;color:#e6edf3;padding:11px 14px;text-align:left;white-space:nowrap;font-weight:600}}
+tbody tr{{border-bottom:1px solid #21262d}}
+tbody tr:last-child{{border-bottom:none}}
+tbody tr:hover{{background:#161b22}}
+tbody td{{padding:10px 14px;vertical-align:middle}}
+.vsub{{font-size:11px;color:#6e7681}}
+.vcode{{background:#161b22;border:1px solid #30363d;border-radius:4px;padding:2px 6px;font-size:12px;color:#79c0ff}}
+.vs-badge{{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}}
+.vs-on{{background:rgba(63,185,80,.15);color:#3fb950}}
+.vs-off{{background:rgba(139,148,158,.1);color:#6e7681}}
+.vb{{padding:5px 12px;border-radius:5px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid transparent;margin-right:4px}}
+.vb-conn{{background:#1f6feb;color:#fff;border-color:#1f6feb}}.vb-conn:hover{{background:#388bfd}}
+.vb-open{{background:#238636;color:#fff;border-color:#2ea043;text-decoration:none;display:inline-block}}.vb-open:hover{{background:#2ea043}}
+.vb-disc{{background:#da3633;color:#fff;border-color:#da3633}}.vb-disc:hover{{background:#f85149}}
+.vb-edit{{background:#21262d;color:#c9d1d9;border-color:#30363d}}.vb-edit:hover{{background:#30363d}}
+.vb-del{{background:rgba(218,54,51,.1);color:#f85149;border-color:rgba(218,54,51,.3)}}.vb-del:hover{{background:rgba(218,54,51,.2)}}
+.empty{{text-align:center;padding:60px;color:#6e7681}}
+.modal-bg{{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:999;align-items:center;justify-content:center}}
+.modal-bg.open{{display:flex}}
+.modal{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:28px 32px;width:420px}}
+.modal h2{{font-size:16px;font-weight:700;color:#e6edf3;margin-bottom:20px}}
+.frow{{margin-bottom:14px}}
+.frow label{{display:block;font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}}
+.frow input,.frow textarea{{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px;padding:8px 10px;outline:none}}
+.frow input:focus,.frow textarea:focus{{border-color:#58a6ff}}
+.frow textarea{{height:60px;resize:vertical}}
+.fbtn{{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}}
+.fbtn button{{padding:8px 18px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer}}
+.fbtn .bsave{{background:#238636;color:#fff;border:1px solid #2ea043}}.fbtn .bsave:hover{{background:#2ea043}}
+.fbtn .bcancel{{background:#21262d;color:#c9d1d9;border:1px solid #30363d}}.fbtn .bcancel:hover{{background:#30363d}}
+.msg{{padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:16px;display:none}}
+.msg.ok{{background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3);color:#3fb950}}
+.msg.err{{background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#f85149}}
+</style></head><body>
+<header>
+  <div class="logo">&#127751; Bridge Phone</div>
+  <div class="nav">
+    <a href="/">Dashboard</a><a href="/admin">Admin</a>
+    <a href="/admin/new-site">New Site</a><a href="/admin/wg-users">VPN Users</a>
+    <a href="/admin/vps-sites" class="act">VPS Sites</a>
+    <a href="/admin/audit">Audit Log</a><a href="/logout">Sign out</a>
+  </div>
+</header>
+<div class="wrap">
+  <div class="ph">
+    <div><h1>FreePBX VPS Sites</h1><div class="sub">SSH tunnel access to remote FreePBX systems</div></div>
+    <button class="badd" onclick="openAdd()">&#43; Add VPS Site</button>
+  </div>
+  <div id="msg" class="msg"></div>
+  {'<div class="empty"><div style="font-size:48px;opacity:.3">&#128268;</div><div style="margin-top:12px">No VPS sites yet. Add one to get started.</div></div>' if not rows else
+   '<div class="tw"><table><thead><tr><th>Name</th><th>IP Address</th><th>Port</th><th>SSH</th><th>Status</th><th>Actions</th></tr></thead><tbody>' + rows_html + '</tbody></table></div>'}
+</div>
+
+<!-- Add/Edit Modal -->
+<div id="modal" class="modal-bg">
+  <div class="modal">
+    <h2 id="modal-title">Add VPS Site</h2>
+    <input type="hidden" id="edit-id" value="">
+    <div class="frow"><label>Site Name (no spaces)</label><input id="f-name" placeholder="pbx-clientname"></div>
+    <div class="frow"><label>Label (display name)</label><input id="f-label" placeholder="Client Name"></div>
+    <div class="frow"><label>IP Address</label><input id="f-ip" placeholder="1.2.3.4"></div>
+    <div class="frow"><label>SSH Username</label><input id="f-user" value="root"></div>
+    <div class="frow"><label>SSH Password</label><input id="f-pass" type="password"></div>
+    <div class="frow"><label>Web Port</label><input id="f-port" value="80" type="number"></div>
+    <div class="frow"><label>Notes (optional)</label><textarea id="f-notes"></textarea></div>
+    <div class="fbtn">
+      <button class="bcancel" onclick="closeModal()">Cancel</button>
+      <button class="bsave" onclick="saveVps()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function showMsg(txt, ok) {{
+  var m=document.getElementById("msg");
+  m.textContent=txt; m.className="msg "+(ok?"ok":"err"); m.style.display="block";
+  setTimeout(function(){{m.style.display="none";}}, 4000);
+}}
+function openAdd() {{
+  document.getElementById("modal-title").textContent="Add VPS Site";
+  document.getElementById("edit-id").value="";
+  ["name","label","ip","pass","notes"].forEach(function(f){{document.getElementById("f-"+f).value="";}});
+  document.getElementById("f-user").value="root";
+  document.getElementById("f-port").value="80";
+  document.getElementById("f-name").disabled=false;
+  document.getElementById("modal").classList.add("open");
+}}
+function editVps(id,name,label,ip,user,port,notes) {{
+  document.getElementById("modal-title").textContent="Edit VPS Site";
+  document.getElementById("edit-id").value=id;
+  document.getElementById("f-name").value=name; document.getElementById("f-name").disabled=true;
+  document.getElementById("f-label").value=label;
+  document.getElementById("f-ip").value=ip;
+  document.getElementById("f-user").value=user;
+  document.getElementById("f-pass").value="";
+  document.getElementById("f-port").value=port;
+  document.getElementById("f-notes").value=notes;
+  document.getElementById("modal").classList.add("open");
+}}
+function closeModal() {{ document.getElementById("modal").classList.remove("open"); }}
+function saveVps() {{
+  var id=document.getElementById("edit-id").value;
+  var data={{name:document.getElementById("f-name").value,
+             label:document.getElementById("f-label").value,
+             ip:document.getElementById("f-ip").value,
+             ssh_user:document.getElementById("f-user").value,
+             ssh_password:document.getElementById("f-pass").value,
+             web_port:document.getElementById("f-port").value,
+             notes:document.getElementById("f-notes").value}};
+  var url=id?"/admin/vps-sites/"+id+"/edit":"/admin/vps-sites/add";
+  fetch(url,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify(data)}})
+    .then(function(r){{return r.json();}})
+    .then(function(d){{
+      if(d.ok){{closeModal();showMsg(d.msg||"Saved",true);setTimeout(function(){{location.reload();}},1000);}}
+      else showMsg(d.error||"Error",false);
+    }});
+}}
+function delVps(id,label) {{
+  if(!confirm("Delete "+label+"?")) return;
+  fetch("/admin/vps-sites/"+id+"/delete",{{method:"POST"}})
+    .then(function(r){{return r.json();}})
+    .then(function(d){{
+      if(d.ok){{showMsg("Deleted",true);setTimeout(function(){{location.reload();}},800);}}
+      else showMsg(d.error||"Error",false);
+    }});
+}}
+function vpsConn(id) {{
+  showMsg("Connecting...",true);
+  fetch("/admin/vps-sites/"+id+"/connect",{{method:"POST",credentials:"same-origin"}})
+    .then(function(r){{return r.json();}})
+    .then(function(d){{
+      if(d.ok){{showMsg("Connected!",true);setTimeout(function(){{location.reload();}},800);}}
+      else showMsg(d.error||"Connection failed",false);
+    }});
+}}
+function vpsDisc(id) {{
+  fetch("/admin/vps-sites/"+id+"/disconnect",{{method:"POST"}})
+    .then(function(r){{return r.json();}})
+    .then(function(d){{ showMsg("Disconnected",true);setTimeout(function(){{location.reload();}},800); }});
+}}
+document.getElementById("modal").addEventListener("click",function(e){{if(e.target===this)closeModal();}});
+</script>
+</body></html>"""
+
+
+@app.route("/admin/vps-sites/add", methods=["POST"])
+@login_required
+def vps_sites_add():
+    if not session.get("is_admin"):
+        return jsonify({"error": "Access denied"}), 403
+    from flask import request as _r
+    data = _r.get_json()
+    name     = (data.get("name") or "").strip()
+    label    = (data.get("label") or "").strip()
+    ip       = (data.get("ip") or "").strip()
+    ssh_user = (data.get("ssh_user") or "root").strip()
+    ssh_pass = (data.get("ssh_password") or "").strip()
+    web_port = int(data.get("web_port") or 80)
+    notes    = (data.get("notes") or "").strip()
+    if not name or not label or not ip or not ssh_pass:
+        return jsonify({"error": "Name, label, IP and password are required"})
+    try:
+        d = get_db()
+        d.execute("INSERT INTO vps_sites(name,label,ip,ssh_user,ssh_password,web_port,notes) VALUES(?,?,?,?,?,?,?)",
+                  (name, label, ip, ssh_user, ssh_pass, web_port, notes))
+        d.commit(); d.close()
+        return jsonify({"ok": True, "msg": f"Added {label}"})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/admin/vps-sites/<int:sid>/edit", methods=["POST"])
+@login_required
+def vps_sites_edit(sid):
+    if not session.get("is_admin"):
+        return jsonify({"error": "Access denied"}), 403
+    from flask import request as _r
+    data     = _r.get_json()
+    label    = (data.get("label") or "").strip()
+    ip       = (data.get("ip") or "").strip()
+    ssh_user = (data.get("ssh_user") or "root").strip()
+    ssh_pass = (data.get("ssh_password") or "").strip()
+    web_port = int(data.get("web_port") or 80)
+    notes    = (data.get("notes") or "").strip()
+    try:
+        d = get_db()
+        if ssh_pass:
+            d.execute("UPDATE vps_sites SET label=?,ip=?,ssh_user=?,ssh_password=?,web_port=?,notes=? WHERE id=?",
+                      (label, ip, ssh_user, ssh_pass, web_port, notes, sid))
+        else:
+            d.execute("UPDATE vps_sites SET label=?,ip=?,ssh_user=?,web_port=?,notes=? WHERE id=?",
+                      (label, ip, ssh_user, web_port, notes, sid))
+        d.commit(); d.close()
+        return jsonify({"ok": True, "msg": "Updated"})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
+@app.route("/admin/vps-sites/<int:sid>/delete", methods=["POST"])
+@login_required
+def vps_sites_delete(sid):
+    if not session.get("is_admin"):
+        return jsonify({"error": "Access denied"}), 403
+    _stop_tunnel(sid)
+    d = get_db()
+    d.execute("DELETE FROM vps_sites WHERE id=?", (sid,))
+    d.commit(); d.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/admin/vps-sites/<int:sid>/connect", methods=["POST"])
+@login_required
+def vps_sites_connect(sid):
+    if not session.get("is_admin"):
+        return jsonify({"error": "Access denied"}), 403
+    d    = get_db()
+    row  = d.execute("SELECT * FROM vps_sites WHERE id=?", (sid,)).fetchone()
+    d.close()
+    if not row:
+        return jsonify({"error": "Site not found"})
+    port = _start_tunnel(sid, row["ip"], row["ssh_user"], row["ssh_password"], row["web_port"])
+    if port:
+        return jsonify({"ok": True, "local_port": port})
+    return jsonify({"error": "Could not establish SSH tunnel — check IP and credentials"})
+
+
+@app.route("/admin/vps-sites/<int:sid>/disconnect", methods=["POST"])
+@login_required
+def vps_sites_disconnect(sid):
+    _stop_tunnel(sid)
+    return jsonify({"ok": True})
+
+
+
+@app.route("/vps/<int:sid>/", defaults={"subpath": ""})
+@app.route("/vps/<int:sid>/<path:subpath>")
+@login_required
+def vps_proxy(sid, subpath):
+    with _vps_lock:
+        tunnel = _vps_tunnels.get(sid)
+    if not tunnel:
+        return "VPS tunnel not connected. <a href='/admin/vps-sites'>Go to VPS Sites</a> and click Connect.", 503
+    tunnel["last_used"] = _vtime.time()
+    local_port = tunnel["local_port"]
+    import requests as _vr
+    target = f"http://localhost:{local_port}/{subpath}"
+    if request.query_string:
+        target += "?" + request.query_string.decode()
+    try:
+        # Build headers - rewrite Referer for FreePBX AJAX and strip dashboard cookies
+        import re as _rfre
+        _vps_hdrs = {}
+        for _hk, _hv in request.headers:
+            _hkl = _hk.lower()
+            if _hkl in ("host","content-length","transfer-encoding"):
+                continue
+            elif _hkl == "cookie":
+                # Only forward PHPSESSID to FreePBX - strip all dashboard/browser cookies
+                _phpsessid = None
+                for c in _hv.split(";"):
+                    if c.strip().startswith("PHPSESSID="):
+                        _phpsessid = c.strip()
+                        break
+                if _phpsessid:
+                    _vps_hdrs[_hk] = _phpsessid
+            elif _hkl == "referer":
+                _vps_hdrs[_hk] = _rfre.sub(
+                    r'http://10\.9\.0\.1:8080/vps/\d+',
+                    f'http://localhost:{local_port}',
+                    _hv)
+            elif _hkl == "origin":
+                _vps_hdrs[_hk] = f'http://localhost:{local_port}'
+            else:
+                _vps_hdrs[_hk] = _hv
+        _vps_hdrs["Host"] = f"localhost:{local_port}"
+        resp = _vr.request(
+            method=request.method,
+            url=target,
+            headers=_vps_hdrs,
+            data=request.get_data(),
+            timeout=30,
+            allow_redirects=False,
+            verify=False,
+        )
+        excluded = ("content-encoding","content-length","transfer-encoding","connection")
+        headers  = {k:v for k,v in resp.headers.items() if k.lower() not in excluded}
+        body     = resp.content
+        ct       = resp.headers.get("Content-Type", "")
+        base     = f"/vps/{sid}/".encode()
+        if "text/html" in ct:
+            body = body.replace(b'href="/', b'href="' + base)
+            body = body.replace(b'src="/',  b'src="'  + base)
+            body = body.replace(b'action="/', b'action="' + base)
+            import re as _vre
+            import re as _vre2
+            _vps_id_str = str(sid)
+            def _inject_base(m):
+                tag = m.group(1)
+                import posixpath as _ppx
+                _vdir = "/vps/" + _vps_id_str + "/" + (_ppx.dirname(subpath.strip("/")) + "/" if _ppx.dirname(subpath.strip("/")) else "")
+                base_tag = tag + b'<base href="' + _vdir.encode() + b'">'
+                return base_tag
+            body = _vre2.sub(b'(<head[^>]*>)', _inject_base, body, count=1)
+        if "javascript" in ct:
+            body = body.replace(b"='/style.css'", b"='" + base + b"style.css'")
+        if "text/css" in ct:
+            import posixpath as _ppx2
+            _css_dir = "/vps/" + str(sid) + "/" + (_ppx2.dirname(subpath.strip("/")) + "/" if _ppx2.dirname(subpath.strip("/")) else "")
+            _css_base = _css_dir.encode()
+            body = body.replace(b'url("../', b'url("' + _css_base)
+            body = body.replace(b"url('../", b"url('" + _css_base)
+            body = body.replace(b'url(../', b'url(' + _css_base)
+        return body, resp.status_code, headers
+    except Exception as e:
+        return f"Proxy error: {e}", 503
+
+
+@app.route("/vps/<int:sid>/fpbx-login", methods=["GET","POST"])
+@login_required
+def vps_fpbx_login(sid):
+    from flask import request as _req, Response as _LR
+    import requests as _vr2
+
+    with _vps_lock:
+        tunnel = _vps_tunnels.get(sid)
+    
+    # Auto-restart tunnel if dead
+    if tunnel and tunnel["proc"].poll() is not None:
+        print(f"[vps tunnel] tunnel {sid} dead, restarting...", flush=True)
+        _stop_tunnel(sid)
+        tunnel = None
+    
+    if not tunnel:
+        # Try to restart tunnel automatically
+        d2 = get_db()
+        row2 = d2.execute("SELECT ip, ssh_user, ssh_password, web_port FROM vps_sites WHERE id=?", (sid,)).fetchone()
+        d2.close()
+        if row2:
+            local_port2 = _start_tunnel(sid, row2["ip"], row2["ssh_user"], row2["ssh_password"], row2["web_port"])
+            if local_port2:
+                with _vps_lock:
+                    tunnel = _vps_tunnels.get(sid)
+        if not tunnel:
+            return "VPS tunnel not connected. <a href='/admin/vps-sites'>Go to VPS Sites</a> and click Connect.", 503
+
+    tunnel["last_used"] = _vtime.time()
+    local_port = tunnel["local_port"]
+
+    # Get site label
+    d = get_db()
+    row = d.execute("SELECT label FROM vps_sites WHERE id=?", (sid,)).fetchone()
+    d.close()
+    label = row["label"] if row else "FreePBX"
+
+    if _req.method == "POST":
+        username = _req.form.get("username", "")
+        password = _req.form.get("password", "")
+        if sid not in _vps_sessions:
+            _vps_sessions[sid] = _vr2.Session()
+        sess = _vps_sessions[sid]
+        try:
+            # Retry up to 3 times in case tunnel is restarting
+            resp = None
+            for _attempt in range(3):
+                try:
+                    resp = sess.post(
+                        f"http://localhost:{local_port}/admin/config.php",
+                        data={"username": username, "password": password},
+                        allow_redirects=False,
+                        timeout=15,
+                    )
+                    break
+                except Exception as _re:
+                    if _attempt < 2:
+                        _vtime.sleep(2)
+                    else:
+                        raise
+            if resp is None:
+                raise Exception("No response after 3 attempts")
+            if resp.status_code in (301, 302, 303, 307):
+                loc = resp.headers.get("Location", "/admin/config.php")
+                if loc.startswith("/"):
+                    loc = f"/vps/{sid}" + loc
+                elif loc.startswith("http://localhost"):
+                    loc = f"/vps/{sid}" + loc[len(f"http://localhost:{local_port}"):]
+                return redirect(loc)
+            # FreePBX returns 200 with admin page on success (no redirect)
+            if resp.status_code == 200 and b"FreePBX" in resp.content and b"login" not in resp.content[:500].lower():
+                from flask import Response as _FR2
+                flask_redir = _FR2("", status=302)
+                flask_redir.headers["Location"] = f"/vps/{sid}/admin/config.php"
+                # Forward all Set-Cookie headers from FreePBX to browser
+                for k, v in resp.raw.headers.items():
+                    if k.lower() == "set-cookie":
+                        flask_redir.headers.add("Set-Cookie", v)
+                return flask_redir
+            # Login failed - show form again with error
+            return vps_login_page(sid, label, error="Invalid username or password")
+        except Exception as e:
+            return vps_login_page(sid, label, error=f"Connection error: {e}")
+
+    # Clear session for fresh login
+    if sid in _vps_sessions:
+        del _vps_sessions[sid]
+    return vps_login_page(sid, label)
+
+def vps_login_page(sid, label, error=""):
+    err_html = f'<div style="background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.4);border-radius:6px;padding:10px 14px;font-size:13px;color:#f85149;margin-bottom:16px">{error}</div>' if error else ""
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Login — {label}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.box{{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:36px 32px;width:360px;box-shadow:0 16px 48px rgba(0,0,0,.4)}}
+.logo{{display:flex;align-items:center;gap:10px;margin-bottom:8px}}
+.logo-icon{{width:36px;height:36px;background:rgba(63,185,80,.15);border:1px solid rgba(63,185,80,.3);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px}}
+.logo-text{{font-size:15px;font-weight:700;color:#e6edf3}}
+.sub{{font-size:12px;color:#8b949e;margin-bottom:24px}}
+label{{display:block;font-size:11px;font-weight:600;color:#8b949e;text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}}
+input{{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:14px;padding:9px 12px;outline:none;margin-bottom:14px}}
+input:focus{{border-color:#58a6ff}}
+button{{width:100%;padding:10px;background:#238636;border:1px solid #2ea043;border-radius:6px;color:#fff;font-size:14px;font-weight:500;cursor:pointer;margin-top:4px}}
+button:hover{{background:#2ea043}}
+.back{{display:block;text-align:center;margin-top:16px;font-size:12px;color:#8b949e;text-decoration:none}}
+.back:hover{{color:#e6edf3}}
+</style></head><body>
+<div class="box">
+  <div class="logo">
+    <div class="logo-icon">&#127751;</div>
+    <div class="logo-text">Bridge Phone</div>
+  </div>
+  <div class="sub">FreePBX Admin — {label}</div>
+  {err_html}
+  <form method="POST">
+    <label>Username</label>
+    <input name="username" type="text" value="pbxadmin" autocomplete="off" autocorrect="off" autocapitalize="off">
+    <label>Password</label>
+    <input name="password" type="password" autocomplete="new-password">
+    <button type="submit">Sign In to FreePBX</button>
+  </form>
+  <a class="back" href="/admin/vps-sites">&#8592; Back to VPS Sites</a>
+</div>
+</body></html>"""
+
 if __name__=="__main__":
+    # Kill any stale SSH tunnels from previous runs
+    import subprocess as _sp2
+    _sp2.run("pkill -f 'ssh.*:19[0-9][0-9][0-9]:' 2>/dev/null", shell=True)
     init_db()
     threading.Thread(target=bg,daemon=True).start()
     port=int(os.environ.get("PORT",8080))
