@@ -2161,7 +2161,7 @@ def _stop_tunnel(site_id):
 
 def _tunnel_watchdog():
     while True:
-        _vtime.sleep(10)
+        _vtime.sleep(30)
         now = _vtime.time()
         # Auto-close idle tunnels
         with _vps_lock:
@@ -2170,21 +2170,6 @@ def _tunnel_watchdog():
         for sid in stale:
             print(f"[vps tunnel] auto-closing idle tunnel {sid}", flush=True)
             _stop_tunnel(sid)
-        # Restart dead tunnels
-        with _vps_lock:
-            dead = [(sid, t) for sid, t in _vps_tunnels.items()
-                    if t["proc"].poll() is not None]
-        for sid, t in dead:
-            print(f"[vps tunnel] restarting dead tunnel {sid}", flush=True)
-            from flask import current_app
-            try:
-                db = get_db()
-                row = db.execute("SELECT ip, ssh_user, ssh_password, web_port FROM vps_sites WHERE id=?", (sid,)).fetchone()
-                db.close()
-                if row:
-                    new_port = _start_tunnel(sid, row["ip"], row["ssh_user"], row["ssh_password"], row["web_port"])
-            except Exception as _re:
-                print(f"[vps tunnel] restart failed: {_re}", flush=True)
 
 threading.Thread(target=_tunnel_watchdog, daemon=True).start()
 
@@ -2484,8 +2469,8 @@ def vps_sites_disconnect(sid):
 
 
 
-@app.route("/vps/<int:sid>/", defaults={"subpath": ""})
-@app.route("/vps/<int:sid>/<path:subpath>")
+@app.route("/vps/<int:sid>/", defaults={"subpath": ""}, methods=["GET","POST","PUT","DELETE","PATCH"])
+@app.route("/vps/<int:sid>/<path:subpath>", methods=["GET","POST","PUT","DELETE","PATCH"])
 @login_required
 def vps_proxy(sid, subpath):
     with _vps_lock:
@@ -2495,6 +2480,13 @@ def vps_proxy(sid, subpath):
     tunnel["last_used"] = _vtime.time()
     local_port = tunnel["local_port"]
     import requests as _vr
+    # Fix font paths
+    if subpath.startswith("fonts/"):
+        subpath = "admin/assets/" + subpath
+    elif "assets/less/fonts/" in subpath:
+        subpath = subpath.replace("assets/less/fonts/", "assets/fonts/")
+    elif "assets/css/fonts/" in subpath:
+        subpath = subpath.replace("assets/css/fonts/", "assets/fonts/")
     target = f"http://localhost:{local_port}/{subpath}"
     if request.query_string:
         target += "?" + request.query_string.decode()
@@ -2695,9 +2687,6 @@ button:hover{{background:#2ea043}}
 </body></html>"""
 
 if __name__=="__main__":
-    # Kill any stale SSH tunnels from previous runs
-    import subprocess as _sp2
-    _sp2.run("pkill -f 'ssh.*:19[0-9][0-9][0-9]:' 2>/dev/null", shell=True)
     init_db()
     threading.Thread(target=bg,daemon=True).start()
     port=int(os.environ.get("PORT",8080))
