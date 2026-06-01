@@ -2154,10 +2154,14 @@ def _stop_tunnel(site_id):
     with _vps_lock:
         if site_id in _vps_tunnels:
             try:
-                _vps_tunnels[site_id]["proc"].terminate()
+                t = _vps_tunnels[site_id]
+                if t.get("tunnel_obj"):
+                    t["tunnel_obj"].stop()
             except:
                 pass
             del _vps_tunnels[site_id]
+    if site_id in _vps_sessions:
+        del _vps_sessions[site_id]
 
 def _tunnel_watchdog():
     while True:
@@ -2687,6 +2691,16 @@ button:hover{{background:#2ea043}}
 </body></html>"""
 
 if __name__=="__main__":
+    # Release any stale tunnel ports on startup
+    import socket as _cs
+    for _p in range(19000, 19020):
+        try:
+            _s = _cs.socket(_cs.AF_INET, _cs.SOCK_STREAM)
+            _s.setsockopt(_cs.SOL_SOCKET, _cs.SO_REUSEADDR, 1)
+            _s.bind(("127.0.0.1", _p))
+            _s.close()
+        except:
+            pass
     init_db()
     threading.Thread(target=bg,daemon=True).start()
     port=int(os.environ.get("PORT",8080))
