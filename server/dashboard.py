@@ -2613,7 +2613,17 @@ def vps_proxy(sid, subpath):
             else:
                 _vps_hdrs[_hk] = _hv
         _vps_hdrs["Host"] = f"localhost:{local_port}"
-        resp = _vr.request(
+        # Use the login session so FreePBX recognizes the authenticated user
+        import requests as _vr2
+        if sid not in _vps_sessions:
+            _vps_sessions[sid] = _vr2.Session()
+        _vps_sess = _vps_sessions[sid]
+        # Sync browser PHPSESSID into session
+        for _c in request.headers.get("Cookie","").split(";"):
+            if _c.strip().startswith("PHPSESSID="):
+                _vps_sess.cookies.set("PHPSESSID", _c.strip()[len("PHPSESSID="):])
+                break
+        resp = _vps_sess.request(
             method=request.method,
             url=target,
             headers=_vps_hdrs,
@@ -2637,7 +2647,7 @@ def vps_proxy(sid, subpath):
             def _inject_base(m):
                 tag = m.group(1)
                 import posixpath as _ppx
-                _vdir = "/vps/" + _vps_id_str + "/" + (_ppx.dirname(subpath.strip("/")) + "/" if _ppx.dirname(subpath.strip("/")) else "")
+                _vdir = "/vps/" + _vps_id_str + "/" + subpath.strip("/")
                 base_tag = tag + b'<base href="' + _vdir.encode() + b'">'
                 return base_tag
             body = _vre2.sub(b'(<head[^>]*>)', _inject_base, body, count=1)
