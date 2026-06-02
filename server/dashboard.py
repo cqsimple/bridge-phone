@@ -280,6 +280,7 @@ def refresh_cache():
         name,vpn_ip=site["name"],site["vpn_ip"]
         info=connected.get(name)
         e={"name":name,"label":site.get("label",name),"vpn_ip":vpn_ip,
+           "dealer":site.get("dealer",""),
            "online":bool(info),"browser_up":False,"scanning":False,
            "device_count":0,"last_scan":0,"bytes_rx":"","bytes_tx":"","connected_since":""}
         if info:
@@ -439,7 +440,11 @@ function load() {
   })
   .then(function(r) {
     if(!r) return;
-    var sites = r.sites || [];
+    var sites = (r.sites || []).sort(function(a,b){
+      var da=(a.dealer||"").toLowerCase(), db=(b.dealer||"").toLowerCase();
+      if(da<db) return -1; if(da>db) return 1;
+      return (a.label||"").toLowerCase().localeCompare((b.label||"").toLowerCase());
+    });
     var on = 0;
     for(var i=0; i<sites.length; i++) { if(sites[i].online) on++; }
     document.getElementById('st').textContent = sites.length;
@@ -490,7 +495,9 @@ function load() {
             + '<div class="ch">'
             + '<span class="badge '+(s.online?'b-gn':'b-mu')+'">'
             + '<span class="dot"></span>'+(s.online?'Online':'Offline')+'</span>'
-            + '<div><div class="lbl">'+s.label+'</div><div class="nm">'+s.name+'</div></div>'
+            + '<div><div class="lbl">'+s.label+'</div><div class="nm">'+s.name
+            + (s.dealer ? ' <span style="color:#8b949e;font-size:.7rem">&middot; '+s.dealer+'</span>' : '')
+            + '</div></div>'
             + '<div class="vip">'+s.vpn_ip+'</div>'
             + '</div>'+body+'</div>';
     }
@@ -1415,34 +1422,83 @@ def admin_new_site():
     next_ip = f"10.8.{site_num // 254}.{(site_num % 254) + 1}"
     next_name = f"rpi-site-{existing_ccd + 1}"
 
-    site_rows = "".join(f"""<tr>
-        <td style='padding:9px 12px;border-bottom:1px solid #21262d;
-            font-family:JetBrains Mono,monospace;font-size:.8rem'>{s['name']}</td>
-        <td style='padding:9px 12px;border-bottom:1px solid #21262d'>{s['label']}</td>
-        <td style='padding:9px 12px;border-bottom:1px solid #21262d;
-            font-family:JetBrains Mono,monospace;font-size:.8rem;
-            color:#58a6ff'>{s['vpn_ip']}</td>
-        <td style='padding:9px 12px;border-bottom:1px solid #21262d;text-align:right'>
-            <a href='/admin/new-site/{s["name"]}/download-ovpn'
-               style='background:rgba(88,166,255,.12);color:#58a6ff;
-               border:1px solid rgba(88,166,255,.28);border-radius:6px;
-               padding:4px 10px;font-size:.72rem;text-decoration:none;margin-right:6px'>
-               Download .ovpn</a>
-            <a href='/admin/new-site/{s["name"]}/download-package'
-               style='background:rgba(63,185,80,.12);color:#3fb950;
-               border:1px solid rgba(63,185,80,.28);border-radius:6px;
-               padding:4px 10px;font-size:.72rem;text-decoration:none;margin-right:6px'>
-               &#8659; Download Setup Package</a>
-            <form method='POST' action='/admin/new-site/{s["name"]}/delete'
-               onsubmit="return confirm('Delete this site? This will revoke the VPN certificate and cannot be undone.')"
-               style='display:inline'>
-               <button style='background:rgba(248,81,73,.12);color:#f85149;
-               border:1px solid rgba(248,81,73,.28);border-radius:6px;
-               padding:4px 10px;font-size:.72rem;cursor:pointer'>Delete</button>
-            </form>
-        </td>
-    </tr>""" for s in sites)
+    sites = sorted(sites, key=lambda x: (x.get("dealer","").lower(), x.get("label","").lower()))
+    def _site_row(s):
+        sn = s["name"]
+        sl = s.get("label", sn)
+        sd = s.get("dealer", "")
+        sv = s["vpn_ip"]
+        sl_js = sl.replace("'", "\'")
+        sd_js = sd.replace("'", "\'")
+        btn_edit = (
+            f"<button onclick=\"editSite('{sn}','{sl_js}','{sd_js}')\" "
+            f"style=\"background:rgba(240,123,16,.12);color:#F07B10;border:1px solid rgba(240,123,16,.28);"
+            f"border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer;margin-right:6px\">Edit</button>"
+        )
+        btn_ovpn = f"<a href='/admin/new-site/{sn}/download-ovpn' style='background:rgba(88,166,255,.12);color:#58a6ff;border:1px solid rgba(88,166,255,.28);border-radius:6px;padding:4px 10px;font-size:.72rem;text-decoration:none;margin-right:6px'>Download .ovpn</a>"
+        btn_pkg  = f"<a href='/admin/new-site/{sn}/download-package' style='background:rgba(63,185,80,.12);color:#3fb950;border:1px solid rgba(63,185,80,.28);border-radius:6px;padding:4px 10px;font-size:.72rem;text-decoration:none;margin-right:6px'>&#8659; Setup Package</a>"
+        btn_del  = (
+            f"<form method='POST' action='/admin/new-site/{sn}/delete' "
+            f"onsubmit=\"return confirm('Delete {sn}?')\" style='display:inline'>"
+            f"<button style='background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.28);border-radius:6px;padding:4px 10px;font-size:.72rem;cursor:pointer'>Delete</button></form>"
+        )
+        return (
+            f"<tr>"
+            f"<td style='padding:9px 12px;border-bottom:1px solid #21262d;font-family:JetBrains Mono,monospace;font-size:.8rem'>{sn}</td>"
+            f"<td style='padding:9px 12px;border-bottom:1px solid #21262d'>{sl}</td>"
+            f"<td style='padding:9px 12px;border-bottom:1px solid #21262d;color:#8b949e'>{sd}</td>"
+            f"<td style='padding:9px 12px;border-bottom:1px solid #21262d;font-family:JetBrains Mono,monospace;font-size:.8rem;color:#58a6ff'>{sv}</td>"
+            f"<td style='padding:9px 12px;border-bottom:1px solid #21262d;text-align:right'>{btn_edit}{btn_ovpn}{btn_pkg}{btn_del}</td>"
+            f"</tr>"
+        )
+    site_rows = "".join(_site_row(s) for s in sites)
 
+    edit_modal = """
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:28px;width:380px">
+    <h3 style="margin-bottom:16px;color:#e6edf3">Edit Site</h3>
+    <input id="edit-name" type="hidden">
+    <div style="margin-bottom:12px">
+      <label style="display:block;font-size:.78rem;color:#8b949e;margin-bottom:4px">Label</label>
+      <input id="edit-label" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:.9rem">
+    </div>
+    <div style="margin-bottom:20px">
+      <label style="display:block;font-size:.78rem;color:#8b949e;margin-bottom:4px">Dealer</label>
+      <input id="edit-dealer" style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:.9rem">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button onclick="closeEdit()" style="background:transparent;border:1px solid #30363d;border-radius:6px;color:#8b949e;padding:7px 16px;cursor:pointer">Cancel</button>
+      <button onclick="saveEdit()" style="background:#238636;border:1px solid #2ea043;border-radius:6px;color:#fff;padding:7px 16px;cursor:pointer">Save</button>
+    </div>
+  </div>
+</div>
+<script>
+function editSite(name, label, dealer) {
+  document.getElementById('edit-name').value = name;
+  document.getElementById('edit-label').value = label;
+  document.getElementById('edit-dealer').value = dealer;
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+function closeEdit() {
+  document.getElementById('edit-modal').style.display = 'none';
+}
+function saveEdit() {
+  var name = document.getElementById('edit-name').value;
+  var label = document.getElementById('edit-label').value;
+  var dealer = document.getElementById('edit-dealer').value;
+  fetch('/admin/new-site/' + name + '/edit', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'same-origin',
+    body: JSON.stringify({label: label, dealer: dealer})
+  }).then(function(r){return r.json();})
+    .then(function(d){
+      if(d.ok) { closeEdit(); location.reload(); }
+      else alert(d.error || 'Error saving');
+    });
+}
+</script>
+"""
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
     <title>New Site — VPN Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Sora:wght@400;600&display=swap" rel="stylesheet">
@@ -1539,6 +1595,10 @@ def admin_new_site():
                 <label>Display Label</label>
                 <input name="label" placeholder="e.g. Branch Office" required>
               </div>
+              <div class="fi">
+                <label>Dealer</label>
+                <input name="dealer" placeholder="e.g. Acme Telecom">
+              </div>
               <div style="padding-bottom:14px">
                 <button class="btn bp" type="submit">Generate Certificate</button>
               </div>
@@ -1595,14 +1655,14 @@ def admin_new_site():
         </div>
         <table>
           <thead><tr>
-            <th>Site Name</th><th>Label</th><th>VPN IP</th><th></th>
+            <th>Site Name</th><th>Label</th><th>Dealer</th><th>VPN IP</th><th></th>
           </tr></thead>
           <tbody>{site_rows if site_rows else
           '<tr><td colspan="4" style="padding:20px;text-align:center;color:#8b949e">No sites yet.</td></tr>'
           }</tbody>
         </table>
       </div>
-    </main></body></html>"""
+    </main>{edit_modal}</body></html>"""
 
 
 @app.route("/admin/new-site/create", methods=["POST"])
@@ -1639,8 +1699,40 @@ def admin_new_site_create():
         output = e.output.decode()[:400] if e.output else "Unknown error"
         session["flash"] = [(f"Error creating site: {output}", "er2")]
 
+    # Save dealer field
+    dealer = request.form.get("dealer", "").strip()
+    if dealer:
+        _sites = load_sites()
+        for _s in _sites:
+            if _s["name"] == site_name:
+                _s["dealer"] = dealer
+                break
+        with open(SITES_FILE, "w") as _df:
+            json.dump(_sites, _df, indent=2)
     return redirect("/admin/new-site")
 
+
+@app.route("/admin/new-site/<site_name>/edit", methods=["POST"])
+@admin_required
+def admin_edit_site(site_name):
+    data = request.get_json()
+    label = data.get("label", "").strip()
+    dealer = data.get("dealer", "").strip()
+    if not label:
+        return jsonify({"ok": False, "error": "Label is required"})
+    sites = load_sites()
+    found = False
+    for s in sites:
+        if s["name"] == site_name:
+            s["label"] = label
+            s["dealer"] = dealer
+            found = True
+            break
+    if not found:
+        return jsonify({"ok": False, "error": "Site not found"})
+    with open(SITES_FILE, "w") as f:
+        json.dump(sites, f, indent=2)
+    return jsonify({"ok": True})
 
 @app.route("/admin/new-site/<site_name>/download-ovpn")
 @admin_required
@@ -2641,6 +2733,10 @@ def vps_fpbx_login(sid):
                 for k, v in resp.raw.headers.items():
                     if k.lower() == "set-cookie":
                         flask_redir.headers.add("Set-Cookie", v)
+                        print(f"[fpbx login] Set-Cookie: {v[:80]}", flush=True)
+                # Also store session cookies for proxy use
+                _vps_sessions[sid] = sess
+                print(f"[fpbx login] Session cookies: {dict(sess.cookies)}", flush=True)
                 return flask_redir
             # Login failed - show form again with error
             return vps_login_page(sid, label, error="Invalid username or password")
