@@ -469,8 +469,8 @@ function load() {
       if(s.online && s.browser_up) {
         if(s.site_type === 'freepbx_vps') {
           if(s.connected_since) chips += '<span class="chip">up '+s.connected_since+'</span>';
-          chips += '<span class="chip ok">&#10003; FreePBX VPS</span>';
-          acts = '<a class="btn bp" href="/site/'+s.name+'/" target="_blank">Open FreePBX</a>'
+          chips += '<span class="chip ok">&#10003; Nimbus VPS</span>';
+          acts = '<a class="btn bp" href="/site/'+s.name+'/" target="_blank">Open Nimbus</a>'
                + ' <button class="btn" style="background:rgba(255,255,255,.06);color:#e6edf3;border:1px solid #21262d" data-n="'+s.name+'" data-l="'+s.label+'" onclick="rename(this.dataset.n,this.dataset.l)" title="Rename">&#9998;</button>'
                + ' ' + discBtn;
         } else {
@@ -2271,7 +2271,7 @@ threading.Thread(target=_tunnel_watchdog, daemon=True).start()
 
 
 @app.route("/admin/vps-sites")
-@login_required
+@admin_required
 def vps_sites_page():
     if not session.get("is_admin"):
         return redirect("/")
@@ -2292,16 +2292,18 @@ def vps_sites_page():
             age_str = str(m) + "m " + str(s) + "s"
             status  = '<span class="vs-badge vs-on">&#9679; Connected (' + age_str + ')</span>'
             actions = ('<a class="vb vb-open" href="/vps/' + str(sid) + '/fpbx-login"'
-                       ' target="_blank">Open FreePBX</a> '
+                       ' target="_blank">Open Nimbus</a> '
                        '<button class="vb vb-disc" onclick="vpsDisc(' + str(sid) + ')">Disconnect</button>')
         else:
             status  = '<span class="vs-badge vs-off">&#9679; Offline</span>'
             actions = '<button class="vb vb-conn" onclick="vpsConn(' + str(sid) + ')">Connect</button>'
         ssh_str  = r["ssh_user"] + "@" + r["ip"]
-        edit_fn  = ('editVps(' + str(sid) + ',"' + r["name"] + '","' + r["label"] + '","'
-                    + r["ip"] + '","' + r["ssh_user"] + '","' + str(r["web_port"]) + '","'
-                    + (r["notes"] or "") + '")' )
-        del_fn   = 'delVps(' + str(sid) + ',"'  + r["label"].replace('"', '&quot;') + '")'
+        def _esc(v):
+            return str(v).replace("\\", "\\\\").replace("'", "\\'").replace('"', '&quot;')
+        edit_fn  = ("editVps(" + str(sid) + ",'" + _esc(r["name"]) + "','" + _esc(r["label"]) + "','"
+                    + _esc(r["ip"]) + "','" + _esc(r["ssh_user"]) + "','" + str(r["web_port"]) + "','"
+                    + _esc(r["notes"] or "") + "')")
+        del_fn   = "delVps(" + str(sid) + ",'" + _esc(r["label"]) + "')"
         rows_html += (
             '<tr><td><strong>' + r["label"] + '</strong><br>'
             '<span class="vsub">' + r["name"] + '</span></td>'
@@ -2376,7 +2378,7 @@ tbody td{{padding:10px 14px;vertical-align:middle}}
 </header>
 <div class="wrap">
   <div class="ph">
-    <div><h1>FreePBX VPS Sites</h1><div class="sub">SSH tunnel access to remote FreePBX systems</div></div>
+    <div><h1>Nimbus VPS Sites</h1><div class="sub">SSH tunnel access to remote Nimbus systems</div></div>
     <button class="badd" onclick="openAdd()">&#43; Add VPS Site</button>
   </div>
   <div id="msg" class="msg"></div>
@@ -2477,7 +2479,7 @@ document.getElementById("modal").addEventListener("click",function(e){{if(e.targ
 
 
 @app.route("/admin/vps-sites/add", methods=["POST"])
-@login_required
+@admin_required
 def vps_sites_add():
     if not session.get("is_admin"):
         return jsonify({"error": "Access denied"}), 403
@@ -2503,7 +2505,7 @@ def vps_sites_add():
 
 
 @app.route("/admin/vps-sites/<int:sid>/edit", methods=["POST"])
-@login_required
+@admin_required
 def vps_sites_edit(sid):
     if not session.get("is_admin"):
         return jsonify({"error": "Access denied"}), 403
@@ -2530,7 +2532,7 @@ def vps_sites_edit(sid):
 
 
 @app.route("/admin/vps-sites/<int:sid>/delete", methods=["POST"])
-@login_required
+@admin_required
 def vps_sites_delete(sid):
     if not session.get("is_admin"):
         return jsonify({"error": "Access denied"}), 403
@@ -2700,7 +2702,7 @@ def vps_fpbx_login(sid):
     d = get_db()
     row = d.execute("SELECT label FROM vps_sites WHERE id=?", (sid,)).fetchone()
     d.close()
-    label = row["label"] if row else "FreePBX"
+    label = row["label"] if row else "Nimbus"
 
     if _req.method == "POST":
         username = _req.form.get("username", "")
@@ -2735,7 +2737,7 @@ def vps_fpbx_login(sid):
                     loc = f"/vps/{sid}" + loc[len(f"http://localhost:{local_port}"):]
                 return redirect(loc)
             # FreePBX returns 200 with admin page on success (no redirect)
-            if resp.status_code == 200 and b"FreePBX" in resp.content and b"login" not in resp.content[:500].lower():
+            if resp.status_code == 200 and b"NimbusVoice" in resp.content or b"FreePBX" in resp.content and b"login" not in resp.content[:500].lower():
                 from flask import Response as _FR2
                 flask_redir = _FR2("", status=302)
                 flask_redir.headers["Location"] = f"/vps/{sid}/admin/config.php"
@@ -2783,14 +2785,14 @@ button:hover{{background:#2ea043}}
     <div class="logo-icon">&#127751;</div>
     <div class="logo-text">Bridge Phone</div>
   </div>
-  <div class="sub">FreePBX Admin — {label}</div>
+  <div class="sub">Nimbus Admin — {label}</div>
   {err_html}
   <form method="POST">
     <label>Username</label>
     <input name="username" type="text" value="pbxadmin" autocomplete="off" autocorrect="off" autocapitalize="off">
     <label>Password</label>
     <input name="password" type="password" autocomplete="new-password">
-    <button type="submit">Sign In to FreePBX</button>
+    <button type="submit">Sign In to Nimbus</button>
   </form>
   <a class="back" href="/admin/vps-sites">&#8592; Back to VPS Sites</a>
 </div>

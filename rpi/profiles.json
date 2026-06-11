@@ -81,7 +81,7 @@
   },
   {
     "vendor_type": "freepbx",
-    "display_name": "FreePBX",
+    "display_name": "Nimbus",
     "oui_prefixes": [
       "00:E0:70"
     ],
